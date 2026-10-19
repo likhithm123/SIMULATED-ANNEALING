@@ -1,0 +1,1198 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Adaptive Simulated Annealing | Interactive Platform</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500;700&family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+
+  <style>
+    :root {
+      --bg-dark: #090d16;
+      --bg-card: rgba(18, 24, 38, 0.85);
+      --bg-card-hover: rgba(26, 34, 54, 0.95);
+      --border-subtle: rgba(255, 255, 255, 0.08);
+      --border-highlight: rgba(56, 189, 248, 0.3);
+      --primary: #38bdf8;
+      --primary-glow: rgba(56, 189, 248, 0.4);
+      --accent: #818cf8;
+      --reheat: #f97316;
+      --reheat-glow: rgba(249, 115, 22, 0.35);
+      --cool: #06b6d4;
+      --success: #10b981;
+      --warning: #f59e0b;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --text-dim: #64748b;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+
+    body {
+      background-color: var(--bg-dark);
+      background-image: 
+        radial-gradient(at 0% 0%, rgba(56, 189, 248, 0.08) 0px, transparent 50%),
+        radial-gradient(at 100% 100%, rgba(129, 140, 248, 0.06) 0px, transparent 50%);
+      color: var(--text-main);
+      font-family: 'Outfit', -apple-system, sans-serif;
+      min-height: 100vh;
+      overflow-x: hidden;
+    }
+
+    /* HEADER */
+    header {
+      padding: 20px 32px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-subtle);
+      background: rgba(15, 23, 42, 0.7);
+      backdrop-filter: blur(16px);
+      position: sticky;
+      top: 0;
+      z-index: 50;
+    }
+
+    .brand-title {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .logo-icon {
+      width: 38px;
+      height: 38px;
+      border-radius: 10px;
+      background: linear-gradient(135deg, #0284c7, #6366f1);
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 20px;
+      box-shadow: 0 0 15px rgba(56, 189, 248, 0.4);
+    }
+
+    .brand-text h1 {
+      font-size: 20px;
+      font-weight: 700;
+      letter-spacing: -0.02em;
+      background: linear-gradient(to right, #ffffff, #93c5fd);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+    }
+
+    .brand-text p {
+      font-size: 12px;
+      color: var(--text-muted);
+      font-weight: 400;
+    }
+
+    .ws-badge {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12px;
+      font-family: 'JetBrains Mono', monospace;
+      background: rgba(0, 0, 0, 0.4);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: #ef4444;
+      box-shadow: 0 0 8px #ef4444;
+    }
+
+    .status-dot.connected {
+      background: #10b981;
+      box-shadow: 0 0 8px #10b981;
+    }
+
+    /* CONTROL PANEL */
+    .controls-wrapper {
+      padding: 16px 32px;
+      background: rgba(18, 24, 38, 0.6);
+      border-bottom: 1px solid var(--border-subtle);
+      display: flex;
+      flex-wrap: wrap;
+      gap: 16px;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .control-group {
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 14px;
+    }
+
+    .field-item {
+      display: flex;
+      flex-direction: column;
+      gap: 5px;
+    }
+
+    .field-item label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    select, input[type="number"] {
+      background: rgba(10, 15, 29, 0.9);
+      border: 1px solid var(--border-subtle);
+      border-radius: 8px;
+      color: var(--text-main);
+      padding: 8px 12px;
+      font-size: 13px;
+      font-family: 'Outfit', sans-serif;
+      outline: none;
+      transition: all 0.2s;
+    }
+
+    select:focus, input[type="number"]:focus {
+      border-color: var(--primary);
+      box-shadow: 0 0 0 2px var(--primary-glow);
+    }
+
+    .slider-item {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 130px;
+    }
+
+    .slider-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    input[type="range"] {
+      accent-color: var(--primary);
+      cursor: pointer;
+    }
+
+    /* ACTION BUTTONS */
+    .button-group {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .btn {
+      padding: 9px 18px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      font-family: 'Outfit', sans-serif;
+      border: none;
+      cursor: pointer;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      transition: all 0.2s cubic-bezier(0.4, 0, 0.2, 1);
+    }
+
+    .btn-primary {
+      background: linear-gradient(135deg, #0284c7, #2563eb);
+      color: white;
+      box-shadow: 0 4px 14px rgba(37, 99, 235, 0.35);
+    }
+
+    .btn-primary:hover:not(:disabled) {
+      background: linear-gradient(135deg, #0ea5e9, #1d4ed8);
+      transform: translateY(-1px);
+      box-shadow: 0 6px 20px rgba(37, 99, 235, 0.5);
+    }
+
+    .btn-secondary {
+      background: rgba(255, 255, 255, 0.06);
+      color: var(--text-main);
+      border: 1px solid var(--border-subtle);
+    }
+
+    .btn-secondary:hover:not(:disabled) {
+      background: rgba(255, 255, 255, 0.12);
+    }
+
+    .btn:disabled {
+      opacity: 0.4;
+      cursor: not-allowed;
+      transform: none !important;
+    }
+
+    /* KPI METRICS GRID */
+    .dashboard-metrics {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(160px, 1fr));
+      gap: 14px;
+      padding: 24px 32px 14px;
+    }
+
+    .kpi-card {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 12px;
+      padding: 14px 16px;
+      position: relative;
+      overflow: hidden;
+      transition: transform 0.2s, border-color 0.2s;
+    }
+
+    .kpi-card:hover {
+      transform: translateY(-2px);
+      border-color: var(--border-highlight);
+    }
+
+    .kpi-card::before {
+      content: "";
+      position: absolute;
+      top: 0;
+      left: 0;
+      right: 0;
+      height: 2px;
+      background: linear-gradient(90deg, transparent, rgba(56, 189, 248, 0.4), transparent);
+    }
+
+    .kpi-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-bottom: 6px;
+      display: flex;
+      justify-content: space-between;
+    }
+
+    .kpi-value {
+      font-size: 24px;
+      font-weight: 700;
+      font-family: 'JetBrains Mono', monospace;
+      color: #ffffff;
+      letter-spacing: -0.02em;
+    }
+
+    .kpi-sub {
+      font-size: 11px;
+      color: var(--text-dim);
+      margin-top: 4px;
+    }
+
+    .mode-badge {
+      display: inline-block;
+      padding: 3px 8px;
+      border-radius: 12px;
+      font-size: 11px;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .mode-balanced { background: rgba(56, 189, 248, 0.15); color: #38bdf8; }
+    .mode-exploration { background: rgba(249, 115, 22, 0.2); color: #f97316; animation: pulse 1.5s infinite; }
+    .mode-exploitation { background: rgba(16, 185, 129, 0.15); color: #10b981; }
+
+    @keyframes pulse {
+      0%, 100% { opacity: 1; }
+      50% { opacity: 0.6; }
+    }
+
+    /* MAIN CONTENT LAYOUT */
+    .content-grid {
+      display: grid;
+      grid-template-columns: 1.15fr 0.85fr;
+      gap: 20px;
+      padding: 10px 32px 32px;
+    }
+
+    @media (max-width: 1100px) {
+      .content-grid {
+        grid-template-columns: 1fr;
+      }
+    }
+
+    .card-panel {
+      background: var(--bg-card);
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 18px 20px;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .card-panel-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 14px;
+    }
+
+    .card-panel-header h2 {
+      font-size: 15px;
+      font-weight: 600;
+      color: #e2e8f0;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    /* CANVAS */
+    .canvas-container {
+      position: relative;
+      width: 100%;
+      height: 480px;
+      background: #040813;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.05);
+      overflow: hidden;
+    }
+
+    #routeCanvas {
+      width: 100%;
+      height: 100%;
+      display: block;
+      cursor: crosshair;
+    }
+
+    .canvas-overlay-tip {
+      position: absolute;
+      bottom: 12px;
+      left: 14px;
+      font-size: 11px;
+      color: var(--text-dim);
+      background: rgba(10, 15, 28, 0.8);
+      padding: 4px 10px;
+      border-radius: 6px;
+      pointer-events: none;
+    }
+
+    /* CHARTS */
+    .charts-stack {
+      display: flex;
+      flex-direction: column;
+      gap: 16px;
+    }
+
+    .chart-box {
+      height: 220px;
+      width: 100%;
+      position: relative;
+    }
+
+    /* LOGS */
+    .log-stream {
+      height: 220px;
+      overflow-y: auto;
+      background: #050914;
+      border-radius: 8px;
+      padding: 10px;
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 12px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+
+    .log-item {
+      padding: 8px 12px;
+      border-radius: 6px;
+      background: rgba(15, 23, 42, 0.6);
+      border-left: 3px solid #64748b;
+      line-height: 1.4;
+    }
+
+    .log-item.reheat {
+      border-left-color: var(--reheat);
+      background: rgba(249, 115, 22, 0.08);
+    }
+
+    .log-item.cool {
+      border-left-color: var(--cool);
+      background: rgba(6, 182, 212, 0.08);
+    }
+
+    .log-item.rapid {
+      border-left-color: var(--success);
+      background: rgba(16, 185, 129, 0.08);
+    }
+
+    .log-time {
+      color: var(--text-dim);
+      font-size: 10px;
+      margin-bottom: 2px;
+    }
+
+    .log-header {
+      font-weight: 700;
+      display: flex;
+      justify-content: space-between;
+      margin-bottom: 3px;
+    }
+
+    /* EXPLANATION ACCORDION / FOOTER BANNER */
+    .explainer-banner {
+      margin: 0 32px 32px;
+      background: linear-gradient(135deg, rgba(30, 41, 59, 0.7), rgba(15, 23, 42, 0.8));
+      border: 1px solid var(--border-subtle);
+      border-radius: 14px;
+      padding: 24px;
+    }
+
+    .explainer-banner h3 {
+      font-size: 16px;
+      margin-bottom: 12px;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .explainer-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+      gap: 18px;
+    }
+
+    .explainer-card {
+      background: rgba(0, 0, 0, 0.25);
+      padding: 16px;
+      border-radius: 10px;
+      border: 1px solid rgba(255, 255, 255, 0.04);
+    }
+
+    .explainer-card h4 {
+      font-size: 13px;
+      color: var(--primary);
+      margin-bottom: 6px;
+    }
+
+    .explainer-card p {
+      font-size: 12px;
+      line-height: 1.5;
+      color: var(--text-muted);
+    }
+
+    /* BENCHMARK COMPARISON MODAL */
+    .modal-overlay {
+      position: fixed;
+      inset: 0;
+      background: rgba(0, 0, 0, 0.8);
+      backdrop-filter: blur(8px);
+      display: none;
+      align-items: center;
+      justify-content: center;
+      z-index: 100;
+    }
+
+    .modal-card {
+      background: #111827;
+      border: 1px solid var(--border-highlight);
+      border-radius: 16px;
+      width: 90%;
+      max-width: 600px;
+      padding: 28px;
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.6);
+    }
+
+    .modal-title {
+      font-size: 20px;
+      font-weight: 700;
+      margin-bottom: 16px;
+      color: white;
+    }
+
+    .modal-table {
+      width: 100%;
+      border-collapse: collapse;
+      margin: 18px 0;
+      font-size: 13px;
+    }
+
+    .modal-table th, .modal-table td {
+      padding: 10px 14px;
+      text-align: left;
+      border-bottom: 1px solid var(--border-subtle);
+    }
+
+    .modal-table th {
+      color: var(--text-muted);
+      font-weight: 600;
+    }
+
+    .winner-tag {
+      color: #10b981;
+      font-weight: 700;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- HEADER -->
+  <header>
+    <div class="brand-title">
+      <div class="logo-icon">⚡</div>
+      <div class="brand-text">
+        <h1>Adaptive Simulated Annealing</h1>
+        <p>Dynamic Feedback Temperature Control & Combinatorial Optimization</p>
+      </div>
+    </div>
+    <div class="ws-badge">
+      <div class="status-dot" id="wsDot"></div>
+      <span id="wsStatus">Connecting...</span>
+    </div>
+  </header>
+
+  <!-- CONTROLS -->
+  <section class="controls-wrapper">
+    <div class="control-group">
+      <div class="field-item">
+        <label>Algorithm</label>
+        <select id="algorithm">
+          <option value="adaptive">Adaptive Simulated Annealing (Feedback Control)</option>
+          <option value="conventional">Conventional SA (Fixed Cooling Schedule)</option>
+          <option value="compare">Benchmark: Side-by-Side (Conventional vs Adaptive)</option>
+        </select>
+      </div>
+
+      <div class="field-item">
+        <label>City Distribution</label>
+        <select id="distribution">
+          <option value="random">Random Scatter</option>
+          <option value="clustered">Clustered Logistics Hubs</option>
+          <option value="circular">Circular Ring Topology</option>
+        </select>
+      </div>
+
+      <div class="field-item">
+        <label>Cities</label>
+        <input type="number" id="cities" value="50" min="6" max="250" style="width: 80px;">
+      </div>
+
+      <div class="field-item">
+        <label>Iterations</label>
+        <input type="number" id="iterations" value="2000" min="100" max="15000" step="100" style="width: 100px;">
+      </div>
+
+      <div class="slider-item">
+        <div class="slider-header">
+          <span>Speed Delay</span>
+          <span id="speedDisplay">2 ms</span>
+        </div>
+        <input type="range" id="speedSlider" min="0" max="30" value="2" oninput="updateSpeed(this.value)">
+      </div>
+    </div>
+
+    <div class="button-group">
+      <button class="btn btn-primary" id="btnStart" onclick="startOptimization()">
+        ▶ Start Run
+      </button>
+      <button class="btn btn-secondary" id="btnPause" onclick="togglePause()" disabled>
+        ⏸ Pause
+      </button>
+      <button class="btn btn-secondary" id="btnStep" onclick="stepOptimization()" disabled>
+        ⏭ Step
+      </button>
+      <button class="btn btn-secondary" id="btnStop" onclick="stopOptimization()" disabled>
+        ⏹ Stop
+      </button>
+      <button class="btn btn-secondary" id="btnClear" onclick="generateNewCities()">
+        🎲 New Seed
+      </button>
+    </div>
+  </section>
+
+  <!-- KPI CARDS -->
+  <section class="dashboard-metrics">
+    <div class="kpi-card">
+      <div class="kpi-label">Progress</div>
+      <div class="kpi-value" id="kpiIteration">0</div>
+      <div class="kpi-sub" id="kpiPercent">0% completed</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-label">Best Tour Length</div>
+      <div class="kpi-value" id="kpiBestCost">-</div>
+      <div class="kpi-sub" id="kpiImprovement">0.0% improved</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-label">Temperature</div>
+      <div class="kpi-value" id="kpiTemperature">-</div>
+      <div class="kpi-sub">
+        <span class="mode-badge mode-balanced" id="kpiMode">IDLE</span>
+      </div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-label">Acceptance Rate</div>
+      <div class="kpi-value" id="kpiAcceptance">-</div>
+      <div class="kpi-sub">Sliding epoch window</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-label">Stagnation / Trapped</div>
+      <div class="kpi-value" id="kpiStagnation">0</div>
+      <div class="kpi-sub" id="kpiReheats">0 reheat events</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-label">Edge Diversity</div>
+      <div class="kpi-value" id="kpiDiversity">-</div>
+      <div class="kpi-sub">Topology variety (0-1)</div>
+    </div>
+
+    <div class="kpi-card">
+      <div class="kpi-label">Last Operator</div>
+      <div class="kpi-value" id="kpiOperator" style="font-size: 19px;">2-Opt</div>
+      <div class="kpi-sub">Neighborhood move</div>
+    </div>
+  </section>
+
+  <!-- MAIN INTERFACE GRID -->
+  <main class="content-grid">
+    <!-- LEFT: ROUTE CANVAS -->
+    <div class="card-panel">
+      <div class="card-panel-header">
+        <h2>🗺️ Traveling Salesperson Route</h2>
+        <span style="font-size: 12px; color: var(--text-muted);" id="routeSub">Click canvas to add custom cities</span>
+      </div>
+      <div class="canvas-container">
+        <canvas id="routeCanvas"></canvas>
+        <div class="canvas-overlay-tip">💡 Tip: Click anywhere to insert custom cities before starting</div>
+      </div>
+    </div>
+
+    <!-- RIGHT: CHARTS & DECISION LOG -->
+    <div class="charts-stack">
+      <!-- COST CHART -->
+      <div class="card-panel">
+        <div class="card-panel-header">
+          <h2>📉 Solution Cost Trajectory</h2>
+          <span style="font-size: 11px; color: var(--text-muted);" id="benchmarkPhase">Single Algorithm</span>
+        </div>
+        <div class="chart-box">
+          <canvas id="costChart"></canvas>
+        </div>
+      </div>
+
+      <!-- TEMPERATURE & FEEDBACK LOG -->
+      <div class="card-panel">
+        <div class="card-panel-header">
+          <h2>🧠 Adaptive Controller Decisions & Temperature</h2>
+          <span style="font-size: 11px; color: var(--text-dim);">Live reasoning stream</span>
+        </div>
+        <div class="log-stream" id="decisionLog">
+          <div class="log-item">
+            <div class="log-header">
+              <span>Ready</span>
+              <span>Iteration 0</span>
+            </div>
+            <div>Select an algorithm and click <strong>Start Run</strong> to initiate real-time optimization.</div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </main>
+
+  <!-- EXPLANATION BANNER -->
+  <section class="explainer-banner">
+    <h3>📖 How Adaptive Simulated Annealing Works</h3>
+    <div class="explainer-grid">
+      <div class="explainer-card">
+        <h4>1. The Analogy of Annealing</h4>
+        <p>In metallurgy, heating metal allows atoms to wander freely, and slow cooling locks them into a durable, defect-free crystal structure. In algorithms, high temperature allows exploration (accepting worse solutions to escape traps), while low temperature exploits good solutions.</p>
+      </div>
+      <div class="explainer-card">
+        <h4>2. The Flaw of Conventional SA</h4>
+        <p>Conventional SA follows a blind, predetermined cooling schedule (e.g., $T_{k+1} = 0.995 T_k$). Once it cools, it becomes rigid. If it gets trapped in a local minimum valley, it is frozen forever and cannot escape.</p>
+      </div>
+      <div class="explainer-card">
+        <h4>3. The Adaptive Feedback Controller</h4>
+        <p>Adaptive SA acts like a smart thermostat. It monitors search health online: if stagnation rises above a threshold or diversity collapses, it <strong>reheats</strong> the system to leap out of traps, and <strong>cools aggressively</strong> when discovering fertile valleys.</p>
+      </div>
+    </div>
+  </section>
+
+  <!-- BENCHMARK MODAL -->
+  <div class="modal-overlay" id="benchmarkModal">
+    <div class="modal-card">
+      <div class="modal-title">🏆 Benchmark Results</div>
+      <p style="color: var(--text-muted); font-size: 13px;">Comparison on identical problem topology and starting route:</p>
+      <table class="modal-table">
+        <thead>
+          <tr>
+            <th>Metric</th>
+            <th>Conventional SA</th>
+            <th>Adaptive SA</th>
+          </tr>
+        </thead>
+        <tbody id="benchmarkTableBody">
+          <!-- Populated by JS -->
+        </tbody>
+      </table>
+      <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
+        <button class="btn btn-primary" onclick="closeModal()">Close</button>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    // State
+    let socket = null;
+    let cities = [];
+    let customCities = [];
+    let isPaused = false;
+    let initialCost = 0;
+    let benchmarkResults = {};
+    let isBenchmarkMode = false;
+
+    // Charts
+    let costChart = null;
+    const costCtx = document.getElementById("costChart").getContext("2d");
+
+    costChart = new Chart(costCtx, {
+      type: "line",
+      data: {
+        labels: [],
+        datasets: [
+          {
+            label: "Adaptive SA",
+            data: [],
+            borderColor: "#38bdf8",
+            backgroundColor: "rgba(56, 189, 248, 0.1)",
+            borderWidth: 2,
+            tension: 0.15,
+            pointRadius: 0,
+          },
+          {
+            label: "Conventional SA",
+            data: [],
+            borderColor: "#f43f5e",
+            backgroundColor: "rgba(244, 63, 94, 0.1)",
+            borderWidth: 2,
+            borderDash: [4, 4],
+            tension: 0.15,
+            pointRadius: 0,
+            hidden: true,
+          }
+        ]
+      },
+      options: {
+        responsive: true,
+        maintainAspectRatio: false,
+        animation: false,
+        scales: {
+          x: {
+            grid: { color: "rgba(255, 255, 255, 0.05)" },
+            ticks: { color: "#64748b", font: { family: "JetBrains Mono", size: 10 } }
+          },
+          y: {
+            grid: { color: "rgba(255, 255, 255, 0.05)" },
+            ticks: { color: "#64748b", font: { family: "JetBrains Mono", size: 10 } }
+          }
+        },
+        plugins: {
+          legend: {
+            labels: { color: "#cbd5e1", font: { family: "Outfit", size: 11 } }
+          }
+        }
+      }
+    });
+
+    // Determine WebSocket URL dynamically
+    function getWebSocketUrl() {
+      const loc = window.location;
+      if (loc.protocol === "file:") {
+        return "ws://127.0.0.1:8008/ws";
+      }
+      const wsProto = loc.protocol === "https:" ? "wss:" : "ws:";
+      return `${wsProto}//${loc.host}/ws`;
+    }
+
+    function initWebSocket() {
+      const wsUrl = getWebSocketUrl();
+      console.log("Connecting WebSocket:", wsUrl);
+      socket = new WebSocket(wsUrl);
+
+      socket.onopen = () => {
+        document.getElementById("wsDot").className = "status-dot connected";
+        document.getElementById("wsStatus").innerText = "Connected";
+      };
+
+      socket.onclose = () => {
+        document.getElementById("wsDot").className = "status-dot";
+        document.getElementById("wsStatus").innerText = "Disconnected";
+        setTimeout(initWebSocket, 2000);
+      };
+
+      socket.onerror = (err) => {
+        console.warn("WebSocket error:", err);
+      };
+
+      socket.onmessage = (event) => {
+        const msg = JSON.parse(event.data);
+        handleServerMessage(msg);
+      };
+    }
+
+    initWebSocket();
+
+    function handleServerMessage(msg) {
+      if (msg.type === "cities") {
+        cities = msg.cities;
+        drawRoute([], false);
+        return;
+      }
+
+      if (msg.type === "benchmark_phase") {
+        document.getElementById("benchmarkPhase").innerText = msg.message;
+        addLogEntry({
+          iteration: "-",
+          decision: "PHASE_START",
+          mode: "BALANCED",
+          reason: msg.message,
+          temperature: 0
+        });
+        return;
+      }
+
+      if (msg.type === "iteration") {
+        updateDashboard(msg);
+        drawRoute(msg.route, true);
+        return;
+      }
+
+      if (msg.type === "complete") {
+        handleRunComplete(msg);
+      }
+    }
+
+    function updateDashboard(data) {
+      const iter = data.iteration;
+      const totalIters = parseInt(document.getElementById("iterations").value) || 2000;
+      
+      document.getElementById("kpiIteration").innerText = iter;
+      document.getElementById("kpiPercent").innerText = `${Math.min(100, Math.round((iter / totalIters) * 100))}% completed`;
+
+      if (initialCost === 0 && data.current_cost) {
+        initialCost = data.current_cost;
+      }
+
+      document.getElementById("kpiBestCost").innerText = data.best_cost.toFixed(1);
+      if (initialCost > 0) {
+        const imp = ((initialCost - data.best_cost) / initialCost) * 100;
+        document.getElementById("kpiImprovement").innerText = `${Math.max(0, imp).toFixed(1)}% improved`;
+      }
+
+      document.getElementById("kpiTemperature").innerText = data.temperature.toFixed(1);
+      document.getElementById("kpiAcceptance").innerText = `${(data.acceptance_rate * 100).toFixed(1)}%`;
+      document.getElementById("kpiStagnation").innerText = data.stagnation;
+      document.getElementById("kpiDiversity").innerText = data.diversity.toFixed(2);
+      if (data.operator) {
+        document.getElementById("kpiOperator").innerText = data.operator;
+      }
+      if (data.total_reheats !== undefined) {
+        document.getElementById("kpiReheats").innerText = `${data.total_reheats} reheat events`;
+      }
+
+      // Update Mode Badge
+      const modeEl = document.getElementById("kpiMode");
+      modeEl.innerText = data.mode;
+      modeEl.className = "mode-badge " + (
+        data.mode === "EXPLORATION" ? "mode-exploration" :
+        data.mode === "EXPLOITATION" ? "mode-exploitation" : "mode-balanced"
+      );
+
+      // Chart updates
+      const isConventional = data.algorithm.includes("Conventional");
+      const datasetIndex = isConventional && isBenchmarkMode ? 1 : 0;
+      
+      if (isBenchmarkMode && isConventional) {
+        costChart.data.datasets[1].hidden = false;
+      }
+
+      costChart.data.labels.push(iter);
+      costChart.data.datasets[datasetIndex].data.push(data.best_cost);
+      costChart.update();
+
+      // Log updates on decisions
+      if (data.decision && data.decision !== "STEADY_COOL" && data.decision !== "FIXED_SCHEDULE") {
+        addLogEntry(data);
+      }
+    }
+
+    function addLogEntry(data) {
+      const stream = document.getElementById("decisionLog");
+      const item = document.createElement("div");
+      
+      let badgeClass = "";
+      if (data.decision.includes("REHEAT") || data.decision.includes("BOOST")) {
+        badgeClass = "reheat";
+      } else if (data.decision.includes("RAPID")) {
+        badgeClass = "rapid";
+      } else if (data.decision.includes("COOL")) {
+        badgeClass = "cool";
+      }
+
+      item.className = `log-item ${badgeClass}`;
+      item.innerHTML = `
+        <div class="log-time">${new Date().toLocaleTimeString()}</div>
+        <div class="log-header">
+          <span style="color: ${badgeClass === 'reheat' ? '#f97316' : badgeClass === 'rapid' ? '#10b981' : '#38bdf8'}">
+            ${data.decision}
+          </span>
+          <span>Iter ${data.iteration} | T: ${typeof data.temperature === 'number' ? data.temperature.toFixed(1) : data.temperature}</span>
+        </div>
+        <div>${data.reason}</div>
+      `;
+
+      stream.prepend(item);
+      if (stream.children.length > 40) {
+        stream.removeChild(stream.lastChild);
+      }
+    }
+
+    function handleRunComplete(data) {
+      document.getElementById("btnStart").disabled = false;
+      document.getElementById("btnPause").disabled = true;
+      document.getElementById("btnStep").disabled = true;
+      document.getElementById("btnStop").disabled = true;
+
+      addLogEntry({
+        iteration: data.iterations_completed,
+        decision: "OPTIMIZATION_COMPLETE",
+        mode: "EXPLOITATION",
+        reason: `Finished with optimal cost: ${data.best_cost.toFixed(1)}. Total local-minima escapes: ${data.stagnation_events}.`,
+        temperature: 0
+      });
+
+      if (isBenchmarkMode) {
+        if (!benchmarkResults.conventional) {
+          benchmarkResults.conventional = data;
+        } else {
+          benchmarkResults.adaptive = data;
+          showBenchmarkModal();
+        }
+      }
+    }
+
+    function showBenchmarkModal() {
+      const conv = benchmarkResults.conventional || { best_cost: 0, stagnation_events: 0 };
+      const adapt = benchmarkResults.adaptive || { best_cost: 0, stagnation_events: 0 };
+      const diff = conv.best_cost - adapt.best_cost;
+      const pct = conv.best_cost > 0 ? ((diff / conv.best_cost) * 100).toFixed(1) : "0.0";
+
+      const tbody = document.getElementById("benchmarkTableBody");
+      tbody.innerHTML = `
+        <tr>
+          <td>Final Best Route Cost</td>
+          <td>${conv.best_cost.toFixed(1)}</td>
+          <td class="winner-tag">${adapt.best_cost.toFixed(1)} (${pct}% better)</td>
+        </tr>
+        <tr>
+          <td>Stagnation Escapes (Reheats)</td>
+          <td>0 (Trapped permanently)</td>
+          <td style="color: #f97316; font-weight: 700;">${adapt.stagnation_events} escapes</td>
+        </tr>
+        <tr>
+          <td>Search Strategy</td>
+          <td>Blind Fixed Geometric Schedule</td>
+          <td style="color: #38bdf8; font-weight: 700;">Online Feedback Control</td>
+        </tr>
+      `;
+
+      document.getElementById("benchmarkModal").style.display = "flex";
+    }
+
+    function closeModal() {
+      document.getElementById("benchmarkModal").style.display = "none";
+    }
+
+    // CANVAS DRAWING
+    const canvas = document.getElementById("routeCanvas");
+    const ctx = canvas.getContext("2d");
+
+    function resizeCanvas() {
+      const rect = canvas.parentElement.getBoundingClientRect();
+      canvas.width = rect.width;
+      canvas.height = rect.height;
+    }
+
+    window.addEventListener("resize", () => {
+      resizeCanvas();
+      drawRoute([], false);
+    });
+
+    // Custom city click handler
+    canvas.addEventListener("click", (e) => {
+      const rect = canvas.getBoundingClientRect();
+      const clickX = e.clientX - rect.left;
+      const clickY = e.clientY - rect.top;
+
+      // Unscale to coordinate space (800x500)
+      const scaleX = 800 / canvas.width;
+      const scaleY = 500 / canvas.height;
+
+      const newCity = {
+        x: Math.round(clickX * scaleX),
+        y: Math.round(clickY * scaleY)
+      };
+
+      cities.push(newCity);
+      customCities.push(newCity);
+      document.getElementById("cities").value = cities.length;
+      document.getElementById("routeSub").innerText = `${cities.length} cities positioned`;
+      drawRoute([], false);
+    });
+
+    function drawRoute(route, isOptimizing) {
+      resizeCanvas();
+      ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+      if (!cities || cities.length === 0) return;
+
+      const scaleX = canvas.width / 800;
+      const scaleY = canvas.height / 500;
+
+      // Draw tour lines
+      if (route && route.length > 1) {
+        ctx.beginPath();
+        route.forEach((cityIdx, i) => {
+          const c = cities[cityIdx];
+          const x = c.x * scaleX;
+          const y = c.y * scaleY;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        });
+
+        // Close loop
+        const first = cities[route[0]];
+        ctx.lineTo(first.x * scaleX, first.y * scaleY);
+
+        ctx.strokeStyle = isOptimizing ? "#38bdf8" : "#64748b";
+        ctx.lineWidth = 2.5;
+        ctx.shadowColor = isOptimizing ? "rgba(56, 189, 248, 0.6)" : "transparent";
+        ctx.shadowBlur = 10;
+        ctx.stroke();
+        ctx.shadowBlur = 0;
+      }
+
+      // Draw city nodes
+      cities.forEach((city, index) => {
+        const x = city.x * scaleX;
+        const y = city.y * scaleY;
+
+        ctx.beginPath();
+        ctx.arc(x, y, 5, 0, Math.PI * 2);
+        ctx.fillStyle = index === 0 ? "#10b981" : "#ffffff";
+        ctx.fill();
+
+        ctx.fillStyle = "#94a3b8";
+        ctx.font = "10px JetBrains Mono";
+        ctx.fillText(index, x + 7, y - 5);
+      });
+    }
+
+    // ACTIONS
+    function startOptimization() {
+      if (!socket || socket.readyState !== WebSocket.OPEN) {
+        alert("Connecting to optimization server... Please wait a moment.");
+        initWebSocket();
+        return;
+      }
+
+      initialCost = 0;
+      isPaused = false;
+      benchmarkResults = {};
+
+      const algo = document.getElementById("algorithm").value;
+      isBenchmarkMode = (algo === "compare");
+
+      // Reset UI & Chart
+      costChart.data.labels = [];
+      costChart.data.datasets[0].data = [];
+      costChart.data.datasets[1].data = [];
+      costChart.data.datasets[1].hidden = !isBenchmarkMode;
+      costChart.update();
+
+      document.getElementById("decisionLog").innerHTML = "";
+
+      document.getElementById("btnStart").disabled = true;
+      document.getElementById("btnPause").disabled = false;
+      document.getElementById("btnStep").disabled = true;
+      document.getElementById("btnStop").disabled = false;
+      document.getElementById("btnPause").innerText = "⏸ Pause";
+
+      const payload = {
+        action: "start",
+        algorithm: algo,
+        cities: parseInt(document.getElementById("cities").value) || 50,
+        iterations: parseInt(document.getElementById("iterations").value) || 2000,
+        distribution: document.getElementById("distribution").value,
+        delay_ms: parseFloat(document.getElementById("speedSlider").value) || 2,
+        custom_cities: customCities.length >= 4 ? customCities : null
+      };
+
+      socket.send(JSON.stringify(payload));
+    }
+
+    function togglePause() {
+      if (!socket) return;
+      isPaused = !isPaused;
+      if (isPaused) {
+        socket.send(JSON.stringify({ action: "pause" }));
+        document.getElementById("btnPause").innerText = "▶ Resume";
+        document.getElementById("btnStep").disabled = false;
+      } else {
+        socket.send(JSON.stringify({ action: "resume" }));
+        document.getElementById("btnPause").innerText = "⏸ Pause";
+        document.getElementById("btnStep").disabled = true;
+      }
+    }
+
+    function stepOptimization() {
+      if (!socket) return;
+      socket.send(JSON.stringify({ action: "step" }));
+    }
+
+    function stopOptimization() {
+      if (!socket) return;
+      socket.send(JSON.stringify({ action: "stop" }));
+      document.getElementById("btnStart").disabled = false;
+      document.getElementById("btnPause").disabled = true;
+      document.getElementById("btnStep").disabled = true;
+      document.getElementById("btnStop").disabled = true;
+    }
+
+    function updateSpeed(val) {
+      document.getElementById("speedDisplay").innerText = `${val} ms`;
+      if (socket && socket.readyState === WebSocket.OPEN) {
+        socket.send(JSON.stringify({ action: "set_speed", delay_ms: parseFloat(val) }));
+      }
+    }
+
+    function generateNewCities() {
+      customCities = [];
+      startOptimization();
+    }
+  </script>
+</body>
+</html>
