@@ -64,6 +64,58 @@ def generate_cities(n: int, seed: int = 42, distribution: str = "random") -> Lis
             y = np.clip(cy + rng.normal(0, 32), 50, 450)
             cities.append({"x": round(float(x), 2), "y": round(float(y), 2)})
 
+    elif distribution == "grid":
+        # Manhattan-style grid lattice with organic jitter
+        side = math.ceil(math.sqrt(n))
+        xs = np.linspace(80, 720, side)
+        ys = np.linspace(60, 440, side)
+        grid_points = [(float(x), float(y)) for x in xs for y in ys]
+        rng.shuffle(grid_points)
+        for i in range(min(n, len(grid_points))):
+            gx, gy = grid_points[i]
+            x = float(np.clip(gx + rng.uniform(-10, 10), 50, 750))
+            y = float(np.clip(gy + rng.uniform(-10, 10), 40, 460))
+            cities.append({"x": round(x, 2), "y": round(y, 2)})
+
+    elif distribution == "spiral":
+        # Archimedean spiral: r = a * theta
+        center_x, center_y = 400.0, 250.0
+        max_turns = 3.2
+        for i in range(n):
+            theta = 0.5 + (max_turns * 2 * math.pi * (i + 1)) / n
+            r = (190.0 * (i + 1)) / n + float(rng.uniform(-8, 8))
+            x = center_x + r * math.cos(theta)
+            y = center_y + (r * 0.75) * math.sin(theta)
+            cities.append({
+                "x": round(float(np.clip(x, 50, 750)), 2),
+                "y": round(float(np.clip(y, 40, 460)), 2)
+            })
+
+    elif distribution == "berlin52":
+        # Classic TSPLIB Berlin52 benchmark (canonical coordinates scaled to canvas)
+        raw_berlin = [
+            (565.0, 575.0), (25.0, 185.0), (345.0, 750.0), (945.0, 685.0), (845.0, 655.0),
+            (880.0, 660.0), (25.0, 230.0), (525.0, 1000.0), (580.0, 1175.0), (650.0, 1130.0),
+            (1605.0, 620.0), (1220.0, 580.0), (1465.0, 1420.0), (1530.0, 1205.0), (845.0, 180.0),
+            (725.0, 370.0), (145.0, 665.0), (415.0, 635.0), (510.0, 875.0), (560.0, 365.0),
+            (300.0, 465.0), (520.0, 585.0), (480.0, 415.0), (835.0, 625.0), (975.0, 580.0),
+            (1215.0, 245.0), (1320.0, 315.0), (1250.0, 400.0), (660.0, 180.0), (410.0, 250.0),
+            (420.0, 555.0), (575.0, 665.0), (1150.0, 1160.0), (700.0, 580.0), (685.0, 595.0),
+            (750.0, 420.0), (420.0, 310.0), (495.0, 425.0), (520.0, 455.0), (575.0, 840.0),
+            (1230.0, 800.0), (1320.0, 730.0), (1440.0, 805.0), (1050.0, 20.0), (630.0, 160.0),
+            (500.0, 930.0), (1010.0, 1125.0), (1140.0, 1075.0), (690.0, 770.0), (830.0, 610.0),
+            (605.0, 625.0), (595.0, 360.0)
+        ]
+        min_x = min(c[0] for c in raw_berlin)
+        max_x = max(c[0] for c in raw_berlin)
+        min_y = min(c[1] for c in raw_berlin)
+        max_y = max(c[1] for c in raw_berlin)
+        count = min(n, len(raw_berlin)) if n > 0 else len(raw_berlin)
+        for bx, by in raw_berlin[:count]:
+            x = 80.0 + ((bx - min_x) / (max_x - min_x)) * 640.0
+            y = 60.0 + ((by - min_y) / (max_y - min_y)) * 380.0
+            cities.append({"x": round(float(x), 2), "y": round(float(y), 2)})
+
     else:  # "random"
         for _ in range(n):
             cities.append({
@@ -121,13 +173,33 @@ def insert_move(route: List[int]) -> Tuple[List[int], str]:
     return new_route, "insert"
 
 
+def or_opt_move(route: List[int]) -> Tuple[List[int], str]:
+    """
+    Or-Opt: Relocates a connected block of 2 or 3 consecutive cities to another position in the tour.
+    Crucial for preserving good local sub-paths while correcting higher-level sequencing.
+    """
+    n = len(route)
+    if n < 6:
+        return insert_move(route)
+
+    seg_len = random.choice([2, 3])
+    i = random.randint(0, n - seg_len)
+    new_route = route.copy()
+    segment = new_route[i : i + seg_len]
+    del new_route[i : i + seg_len]
+
+    j = random.randint(0, len(new_route))
+    new_route[j:j] = segment
+    return new_route, "or-opt"
+
+
 def apply_neighborhood_operator(route: List[int], operator_weights: Optional[Dict[str, float]] = None) -> Tuple[List[int], str]:
     """
     Selects neighborhood operator based on dynamic weights.
-    Defaults to 70% 2-opt, 20% insert, 10% swap.
+    Defaults to 65% 2-opt, 15% or-opt, 12% insert, 8% swap.
     """
     if operator_weights is None:
-        operator_weights = {"2-opt": 0.70, "insert": 0.20, "swap": 0.10}
+        operator_weights = {"2-opt": 0.65, "or-opt": 0.15, "insert": 0.12, "swap": 0.08}
 
     ops = list(operator_weights.keys())
     weights = list(operator_weights.values())
@@ -135,6 +207,8 @@ def apply_neighborhood_operator(route: List[int], operator_weights: Optional[Dic
 
     if chosen_op == "2-opt":
         return two_opt_move(route)
+    elif chosen_op == "or-opt":
+        return or_opt_move(route)
     elif chosen_op == "insert":
         return insert_move(route)
     else:
@@ -470,7 +544,7 @@ async def run_adaptive_sa(
     }
 
     # Adaptive operator weights
-    op_weights = {"2-opt": 0.70, "insert": 0.20, "swap": 0.10}
+    op_weights = {"2-opt": 0.65, "or-opt": 0.15, "insert": 0.12, "swap": 0.08}
 
     for iteration in range(1, iterations + 1):
         if session.is_stopped:
@@ -531,13 +605,13 @@ async def run_adaptive_sa(
 
             if "REHEAT" in decision_data["decision"]:
                 total_reheats += 1
-                # When reheating, give a slight boost to insert/swap for structural diversification
-                op_weights = {"2-opt": 0.50, "insert": 0.35, "swap": 0.15}
+                # When reheating, boost or-opt/insert/swap for structural diversification
+                op_weights = {"2-opt": 0.40, "or-opt": 0.25, "insert": 0.20, "swap": 0.15}
             elif decision_data["mode"] == "EXPLOITATION":
-                # In exploitation mode, emphasize 2-opt edge untangling
-                op_weights = {"2-opt": 0.85, "insert": 0.10, "swap": 0.05}
+                # In exploitation mode, emphasize 2-opt and or-opt untangling
+                op_weights = {"2-opt": 0.80, "or-opt": 0.12, "insert": 0.05, "swap": 0.03}
             else:
-                op_weights = {"2-opt": 0.70, "insert": 0.20, "swap": 0.10}
+                op_weights = {"2-opt": 0.65, "or-opt": 0.15, "insert": 0.12, "swap": 0.08}
 
         # Send updates every 5 iterations or at end
         if iteration % 5 == 0 or iteration == iterations:
@@ -739,9 +813,25 @@ def health():
     return {
         "status": "healthy",
         "service": "Adaptive Simulated Annealing Platform",
-        "version": "2.0.0",
+        "version": "2.1.0",
         "algorithms": ["adaptive", "conventional", "compare"],
-        "distributions": ["random", "clustered", "circular"],
+        "distributions": ["random", "clustered", "circular", "grid", "spiral", "berlin52"],
+        "operators": ["2-opt", "or-opt", "insert", "swap"],
+    }
+
+
+@app.get("/api/presets")
+def get_presets():
+    return {
+        "distributions": [
+            {"id": "random", "name": "Random Scatter", "description": "Uniform random 2D spatial distribution"},
+            {"id": "clustered", "name": "Clustered Logistics Hubs", "description": "Multi-center Gaussian clusters representing freight depots"},
+            {"id": "circular", "name": "Circular Ring Topology", "description": "Concentric perturbed circular ring"},
+            {"id": "grid", "name": "Manhattan Grid Lattice", "description": "Regular coordinate grid with minor jitter"},
+            {"id": "spiral", "name": "Archimedean Spiral", "description": "Continuous spiral curve challenging local search"},
+            {"id": "berlin52", "name": "Berlin52 (TSPLIB)", "description": "Canonical TSPLIB 52-city benchmark instance"},
+        ],
+        "operators": ["2-opt", "or-opt", "insert", "swap"],
     }
 
 

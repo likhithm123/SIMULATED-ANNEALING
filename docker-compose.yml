@@ -1,0 +1,11 @@
+services:
+  adaptive-sa:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: adaptive-sa-platform
+    ports:
+      - "8008:8008"
+    environment:
+      - PORT=8008
+    restart: unless-stopped

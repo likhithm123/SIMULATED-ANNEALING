@@ -578,6 +578,9 @@
           <option value="random">Random Scatter</option>
           <option value="clustered">Clustered Logistics Hubs</option>
           <option value="circular">Circular Ring Topology</option>
+          <option value="grid">Manhattan Grid Lattice</option>
+          <option value="spiral">Archimedean Spiral</option>
+          <option value="berlin52">Berlin52 (TSPLIB Benchmark)</option>
         </select>
       </div>
 
@@ -615,6 +618,15 @@
       </button>
       <button class="btn btn-secondary" id="btnClear" onclick="generateNewCities()">
         🎲 New Seed
+      </button>
+      <button class="btn btn-secondary" id="btnExportJson" onclick="exportRouteJSON()" title="Export optimal route coordinates and indices as JSON">
+        📥 JSON
+      </button>
+      <button class="btn btn-secondary" id="btnExportCsv" onclick="exportHistoryCSV()" title="Export iteration convergence telemetry as CSV">
+        📊 CSV
+      </button>
+      <button class="btn btn-secondary" id="btnAudio" onclick="toggleAudio()" title="Toggle Web Audio feedback on reheats and completion">
+        🔊 Sound: Off
       </button>
     </div>
   </section>
@@ -763,6 +775,10 @@
     let initialCost = 0;
     let benchmarkResults = {};
     let isBenchmarkMode = false;
+    let latestRoute = [];
+    let telemetryHistory = [];
+    let audioEnabled = false;
+    let audioCtx = null;
 
     // Charts
     let costChart = null;
@@ -892,6 +908,22 @@
       document.getElementById("kpiIteration").innerText = iter;
       document.getElementById("kpiPercent").innerText = `${Math.min(100, Math.round((iter / totalIters) * 100))}% completed`;
 
+      if (data.route) latestRoute = data.route;
+      telemetryHistory.push({
+        iteration: data.iteration,
+        cost: data.best_cost,
+        temperature: data.temperature,
+        acceptance: data.acceptance_rate,
+        stagnation: data.stagnation,
+        diversity: data.diversity,
+        mode: data.mode,
+        decision: data.decision
+      });
+
+      if (audioEnabled && data.decision && data.decision.includes("REHEAT")) {
+        playSynthTone(587.33, 0.12, "triangle");
+      }
+
       if (initialCost === 0 && data.current_cost) {
         initialCost = data.current_cost;
       }
@@ -983,6 +1015,10 @@
         reason: `Finished with optimal cost: ${data.best_cost.toFixed(1)}. Total local-minima escapes: ${data.stagnation_events}.`,
         temperature: 0
       });
+
+      if (audioEnabled) {
+        playSuccessChime();
+      }
 
       if (isBenchmarkMode) {
         if (!benchmarkResults.conventional) {
@@ -1122,6 +1158,7 @@
       initialCost = 0;
       isPaused = false;
       benchmarkResults = {};
+      telemetryHistory = [];
 
       const algo = document.getElementById("algorithm").value;
       isBenchmarkMode = (algo === "compare");
@@ -1192,6 +1229,83 @@
     function generateNewCities() {
       customCities = [];
       startOptimization();
+    }
+
+    function toggleAudio() {
+      audioEnabled = !audioEnabled;
+      const btn = document.getElementById("btnAudio");
+      btn.innerText = audioEnabled ? "🔊 Sound: On" : "🔇 Sound: Off";
+      btn.style.color = audioEnabled ? "#10b981" : "var(--text-main)";
+      if (audioEnabled && !audioCtx) {
+        audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+      }
+    }
+
+    function playSynthTone(freq, duration, type = "sine") {
+      try {
+        if (!audioCtx) audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+        if (audioCtx.state === "suspended") audioCtx.resume();
+        const osc = audioCtx.createOscillator();
+        const gain = audioCtx.createGain();
+        osc.type = type;
+        osc.frequency.setValueAtTime(freq, audioCtx.currentTime);
+        gain.gain.setValueAtTime(0.08, audioCtx.currentTime);
+        gain.gain.exponentialRampToValueAtTime(0.001, audioCtx.currentTime + duration);
+        osc.connect(gain);
+        gain.connect(audioCtx.destination);
+        osc.start();
+        osc.stop(audioCtx.currentTime + duration);
+      } catch (e) {
+        console.warn("Audio playback exception", e);
+      }
+    }
+
+    function playSuccessChime() {
+      const notes = [523.25, 659.25, 783.99, 1046.50];
+      notes.forEach((freq, idx) => {
+        setTimeout(() => playSynthTone(freq, 0.18, "sine"), idx * 90);
+      });
+    }
+
+    function exportRouteJSON() {
+      if (!cities || cities.length === 0) {
+        alert("No active tour data to export. Please run an optimization first.");
+        return;
+      }
+      const data = {
+        exported_at: new Date().toISOString(),
+        algorithm: document.getElementById("algorithm").value,
+        distribution: document.getElementById("distribution").value,
+        city_count: cities.length,
+        cities: cities,
+        best_tour_indices: latestRoute,
+        best_cost: parseFloat(document.getElementById("kpiBestCost").innerText) || null
+      };
+      const blob = new Blob([JSON.stringify(data, null, 2)], { type: "application/json" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `tsp_optimal_route_${Date.now()}.json`;
+      a.click();
+      URL.revokeObjectURL(url);
+    }
+
+    function exportHistoryCSV() {
+      if (!telemetryHistory || telemetryHistory.length === 0) {
+        alert("No run telemetry recorded yet. Start an optimization to generate data.");
+        return;
+      }
+      let csv = "Iteration,BestCost,Temperature,AcceptanceRate,Stagnation,Diversity,Mode,Decision\n";
+      telemetryHistory.forEach(r => {
+        csv += `${r.iteration},${r.cost},${r.temperature},${r.acceptance},${r.stagnation},${r.diversity},"${r.mode}","${r.decision}"\n`;
+      });
+      const blob = new Blob([csv], { type: "text/csv" });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement("a");
+      a.href = url;
+      a.download = `tsp_convergence_history_${Date.now()}.csv`;
+      a.click();
+      URL.revokeObjectURL(url);
     }
   </script>
 </body>
