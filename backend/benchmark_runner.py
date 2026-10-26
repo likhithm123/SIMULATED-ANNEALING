@@ -128,6 +128,8 @@ def run_headless_simulation(
         if is_standard:
             temperature = max(0.01, temperature * cooling_alpha)
         else:
+            controller.step_cool()
+
             # Feedback epoch every 40 iterations
             if iteration % 40 == 0:
                 win_acc = sum(recent_accepts) / len(recent_accepts)
@@ -141,14 +143,21 @@ def run_headless_simulation(
                     stagnation=stagnation,
                     diversity=diversity,
                     current_best_cost=best_cost,
+                    total_iterations=iterations,
                 )
 
-                if "REHEAT" in decision_data["decision"] or "DIVERSIFICATION" in decision_data["decision"]:
-                    total_reheats += 1
+                total_reheats = controller.total_reheats
+
+                if decision_data.get("reset_stagnation"):
+                    stagnation = 0
+                    route = best_route.copy()
+                    current_cost = best_cost
                     if decision_data["decision"] == "STRUCTURAL_DIVERSIFICATION":
-                        op_weights = {"2-opt": 0.35, "or-opt": 0.30, "insert": 0.20, "swap": 0.15}
+                        op_weights = {"2-opt": 0.40, "or-opt": 0.30, "insert": 0.20, "swap": 0.10}
                     else:
-                        op_weights = {"2-opt": 0.50, "or-opt": 0.22, "insert": 0.18, "swap": 0.10}
+                        op_weights = {"2-opt": 0.55, "or-opt": 0.25, "insert": 0.12, "swap": 0.08}
+                elif decision_data["decision"] == "TERMINAL_QUENCH":
+                    op_weights = {"2-opt": 0.88, "or-opt": 0.10, "insert": 0.02, "swap": 0.00}
                 elif decision_data["mode"] == "EXPLOITATION":
                     op_weights = {"2-opt": 0.80, "or-opt": 0.12, "insert": 0.05, "swap": 0.03}
                 else:

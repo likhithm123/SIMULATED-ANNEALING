@@ -358,3 +358,51 @@ def test_benchmark_export_csv():
     assert response.status_code == 200
     assert "text/csv" in response.headers["content-type"]
     assert "Algorithm,InitialCost,BestCost" in response.text
+
+
+def test_adaptive_controller_step_cool():
+    controller = AdaptiveTemperatureController(initial_temperature=600.0)
+    controller.alpha = 0.995
+    t1 = controller.step_cool()
+    assert math.isclose(t1, 600.0 * 0.995, rel_tol=1e-3)
+    t2 = controller.step_cool()
+    assert t2 < t1
+
+
+def test_adaptive_controller_terminal_quench():
+    controller = AdaptiveTemperatureController(initial_temperature=50.0)
+    # At iteration 1700 out of 2000 (85%), even with deep stagnation and low diversity,
+    # it must enter TERMINAL_QUENCH to freeze into the minimum basin rather than reheating
+    res = controller.update(
+        iteration=1700,
+        window_acceptance_rate=0.01,
+        window_improvement_rate=0.0,
+        stagnation=150,
+        diversity=0.02,
+        total_iterations=2000,
+    )
+    assert res["decision"] == "TERMINAL_QUENCH"
+    assert res["mode"] == "EXPLOITATION"
+    assert res["reset_stagnation"] is False
+    assert controller.total_reheats == 0
+
+
+def test_adaptive_controller_reheat_capping():
+    controller = AdaptiveTemperatureController(initial_temperature=300.0, max_reheats=2)
+    # Reheat 1
+    r1 = controller.update(iteration=40, window_acceptance_rate=0.2, window_improvement_rate=0.01, stagnation=120, diversity=0.4)
+    assert r1["decision"] == "LOCAL_MINIMA_REHEAT"
+    assert r1["reset_stagnation"] is True
+    assert controller.total_reheats == 1
+
+    # Reheat 2
+    r2 = controller.update(iteration=90, window_acceptance_rate=0.2, window_improvement_rate=0.01, stagnation=120, diversity=0.4)
+    assert r2["decision"] == "LOCAL_MINIMA_REHEAT"
+    assert controller.total_reheats == 2
+
+    # Reheat 3 should be capped -> BASIN_INTENSIFICATION
+    r3 = controller.update(iteration=140, window_acceptance_rate=0.2, window_improvement_rate=0.01, stagnation=120, diversity=0.4)
+    assert r3["decision"] == "BASIN_INTENSIFICATION"
+    assert r3["mode"] == "EXPLOITATION"
+    assert controller.total_reheats == 2
+    assert r3["reset_stagnation"] is False

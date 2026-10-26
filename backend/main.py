@@ -286,6 +286,7 @@ class AdaptiveTemperatureController:
         max_temperature: float = 1200.0,
         ablation_mode: str = "full",
         reheat_cooldown: int = 40,
+        max_reheats: int = 3,
     ):
         self.temperature = initial_temperature
         self.initial_temperature = initial_temperature
@@ -293,6 +294,7 @@ class AdaptiveTemperatureController:
         self.max_temperature = max_temperature
         self.ablation_mode = ablation_mode
         self.reheat_cooldown = reheat_cooldown
+        self.max_reheats = max_reheats
 
         # Multipliers
         self.reheat_structural_multiplier = 1.45
@@ -303,8 +305,16 @@ class AdaptiveTemperatureController:
         self.cool_moderate_multiplier = 0.94
         self.cool_steady_multiplier = 0.985
 
+        # Dynamic cooling rate and reheat budget tracking
+        self.alpha = 0.995
+        self.total_reheats = 0
         self.last_reheat_iteration = -100
         self.decision_history: List[Dict[str, Any]] = []
+
+    def step_cool(self) -> float:
+        """Step-wise cooling performed at each iteration step."""
+        self.temperature = max(self.min_temperature, self.temperature * self.alpha)
+        return self.temperature
 
     def update(
         self,
@@ -314,8 +324,10 @@ class AdaptiveTemperatureController:
         stagnation: int,
         diversity: float,
         current_best_cost: Optional[float] = None,
+        total_iterations: int = 2000,
     ) -> Dict[str, Any]:
         old_temp = self.temperature
+        reset_stagnation = False
 
         # Apply ablation filters
         w_acc = window_acceptance_rate if self.ablation_mode not in ("no_acceptance", "standard_sa") else 0.25
@@ -340,6 +352,7 @@ class AdaptiveTemperatureController:
 
         # --- ABLATION BASELINE: Standard SA (Blind geometric cooling) ---
         if self.ablation_mode == "standard_sa":
+            self.alpha = 0.995
             self.temperature = max(self.min_temperature, self.temperature * 0.995)
             decision = "FIXED_COOL"
             mode = "BALANCED"
@@ -350,18 +363,21 @@ class AdaptiveTemperatureController:
         elif self.ablation_mode == "acceptance_only":
             if w_acc < 0.15:
                 self.temperature = min(self.max_temperature, self.temperature * 1.10)
+                self.alpha = 0.996
                 decision = "ACCEPTANCE_BOOST"
                 mode = "EXPLORATION"
                 reason = f"Acceptance rate low ({w_acc*100:.1f}% < 15%). Boosting temperature."
                 triggered_signals = ["acceptance"]
             elif w_acc > 0.40:
                 self.temperature = max(self.min_temperature, self.temperature * 0.92)
+                self.alpha = 0.992
                 decision = "ACCEPTANCE_COOL"
                 mode = "EXPLOITATION"
                 reason = f"Acceptance rate high ({w_acc*100:.1f}% > 40%). Quenching temperature."
                 triggered_signals = ["acceptance"]
             else:
                 self.temperature = max(self.min_temperature, self.temperature * 0.985)
+                self.alpha = 0.995
                 decision = "STEADY_COOL"
                 mode = "BALANCED"
                 reason = f"Acceptance rate nominal ({w_acc*100:.1f}% in [15%, 40%]). Steady cooling."
@@ -375,38 +391,78 @@ class AdaptiveTemperatureController:
             is_freezing = (w_acc < 0.05 and self.temperature < (self.max_temperature * 0.70))
             is_fertile_valley = (w_imp > 0.12)
             is_overly_loose = (w_acc > 0.55)
+            is_terminal_phase = (iteration > int(0.80 * total_iterations))
+
+            # Terminal Phase Quench: Lock out reheats and freeze into minimum basin
+            if is_terminal_phase:
+                self.alpha = 0.991
+                self.temperature = max(self.min_temperature, self.temperature * 0.95)
+                decision = "TERMINAL_QUENCH"
+                mode = "EXPLOITATION"
+                reason = f"Final convergence phase ({iteration}/{total_iterations}): Reheats locked out to freeze into minimum."
+                triggered_signals = ["convergence"]
 
             # Priority 1: Catastrophic Entrapment (Both Deep Stagnation AND Diversity Collapse)
-            # Evaluates signals simultaneously to prevent priority inversion
-            if is_deep_stagnation and is_diversity_collapsed and can_reheat:
-                self.temperature = min(self.max_temperature, self.temperature * self.reheat_structural_multiplier)
-                decision = "STRUCTURAL_DIVERSIFICATION"
-                mode = "EXPLORATION"
-                reason = f"Dual Trigger: Stagnation={stag} steps & Diversity={div:.3f} < 0.08. Major reheat and topological perturbation."
-                triggered_signals = ["stagnation", "diversity"]
-                self.last_reheat_iteration = iteration
+            elif is_deep_stagnation and is_diversity_collapsed and can_reheat:
+                if self.total_reheats < self.max_reheats:
+                    self.temperature = min(self.max_temperature, max(self.temperature * self.reheat_structural_multiplier, 35.0))
+                    self.alpha = 0.995
+                    self.last_reheat_iteration = iteration
+                    self.total_reheats += 1
+                    reset_stagnation = True
+                    decision = "STRUCTURAL_DIVERSIFICATION"
+                    mode = "EXPLORATION"
+                    reason = f"Dual Trigger: Stagnation={stag} steps & Diversity={div:.3f} < 0.08. Reheat escape #{self.total_reheats}/{self.max_reheats}."
+                    triggered_signals = ["stagnation", "diversity"]
+                else:
+                    self.alpha = 0.992
+                    decision = "BASIN_INTENSIFICATION"
+                    mode = "EXPLOITATION"
+                    reason = f"Reheat budget reached ({self.total_reheats}/{self.max_reheats}). Intensifying local exploitation."
+                    triggered_signals = ["stagnation", "diversity"]
 
             # Priority 2: Deep Stagnation with Preserved Diversity (Local Minimum Basin)
             elif is_deep_stagnation and can_reheat:
-                self.temperature = min(self.max_temperature, self.temperature * self.reheat_local_multiplier)
-                decision = "LOCAL_MINIMA_REHEAT"
-                mode = "EXPLORATION"
-                reason = f"Stagnation={stag} steps in local basin. Reheating while maintaining topological diversity ({div:.2f})."
-                triggered_signals = ["stagnation"]
-                self.last_reheat_iteration = iteration
+                if self.total_reheats < self.max_reheats:
+                    self.temperature = min(self.max_temperature, max(self.temperature * self.reheat_local_multiplier, 25.0))
+                    self.alpha = 0.995
+                    self.last_reheat_iteration = iteration
+                    self.total_reheats += 1
+                    reset_stagnation = True
+                    decision = "LOCAL_MINIMA_REHEAT"
+                    mode = "EXPLORATION"
+                    reason = f"Stagnation={stag} steps in local basin. Reheat escape #{self.total_reheats}/{self.max_reheats}."
+                    triggered_signals = ["stagnation"]
+                else:
+                    self.alpha = 0.992
+                    decision = "BASIN_INTENSIFICATION"
+                    mode = "EXPLOITATION"
+                    reason = f"Reheat budget reached ({self.total_reheats}/{self.max_reheats}). Intensifying local exploitation."
+                    triggered_signals = ["stagnation"]
 
             # Priority 3: Diversity Collapse at Moderate Stagnation (Cyclic Tour Loops)
             elif is_diversity_collapsed and is_moderate_stagnation and can_reheat:
-                self.temperature = min(self.max_temperature, self.temperature * self.reheat_diversity_multiplier)
-                decision = "DIVERSITY_REHEAT"
-                mode = "EXPLORATION"
-                reason = f"Diversity collapsed to {div:.3f} with stagnation={stag}. Warming system to sample diverse topologies."
-                triggered_signals = ["diversity", "stagnation"]
-                self.last_reheat_iteration = iteration
+                if self.total_reheats < self.max_reheats:
+                    self.temperature = min(self.max_temperature, max(self.temperature * self.reheat_diversity_multiplier, 20.0))
+                    self.alpha = 0.995
+                    self.last_reheat_iteration = iteration
+                    self.total_reheats += 1
+                    reset_stagnation = True
+                    decision = "DIVERSITY_REHEAT"
+                    mode = "EXPLORATION"
+                    reason = f"Diversity collapsed to {div:.3f} with stagnation={stag}. Reheat escape #{self.total_reheats}/{self.max_reheats}."
+                    triggered_signals = ["diversity", "stagnation"]
+                else:
+                    self.alpha = 0.992
+                    decision = "BASIN_INTENSIFICATION"
+                    mode = "EXPLOITATION"
+                    reason = f"Reheat budget reached ({self.total_reheats}/{self.max_reheats}). Intensifying local exploitation."
+                    triggered_signals = ["diversity", "stagnation"]
 
             # Priority 4: Critical Freezing Risk (Low Acceptance)
             elif is_freezing:
-                self.temperature = min(self.max_temperature, self.temperature * self.boost_multiplier)
+                self.temperature = min(self.max_temperature, max(self.temperature * self.boost_multiplier, 15.0))
+                self.alpha = 0.997
                 decision = "THAW_BOOST"
                 mode = "EXPLORATION"
                 reason = f"Premature freeze: Acceptance={w_acc*100:.1f}% < 5%. Boosting temperature to restore mobility."
@@ -415,14 +471,16 @@ class AdaptiveTemperatureController:
             # Priority 5: Fertile Gradient Discovery (Rapid Progress in Attraction Basin)
             elif is_fertile_valley:
                 self.temperature = max(self.min_temperature, self.temperature * self.cool_rapid_multiplier)
+                self.alpha = 0.993
                 decision = "RAPID_COOL"
                 mode = "EXPLOITATION"
-                reason = f"Fertile valley: Improvement rate={w_imp*100:.1f}% > 12%. Rapid cooling to accelerate convergence."
+                reason = f"Fertile valley: Improvement rate={w_imp*100:.1f}% > 12%. Accelerating local exploitation."
                 triggered_signals = ["improvement"]
 
             # Priority 6: High Random Drift (Overly Loose Search)
             elif is_overly_loose:
                 self.temperature = max(self.min_temperature, self.temperature * self.cool_moderate_multiplier)
+                self.alpha = 0.993
                 decision = "MODERATE_COOL"
                 mode = "EXPLOITATION"
                 reason = f"Acceptance high ({w_acc*100:.1f}% > 55%). Cooling to reduce random Brownian walk."
@@ -431,6 +489,7 @@ class AdaptiveTemperatureController:
             # Priority 7: Nominal Balanced Cooling
             else:
                 self.temperature = max(self.min_temperature, self.temperature * self.cool_steady_multiplier)
+                self.alpha = 0.995
                 decision = "STEADY_COOL"
                 mode = "BALANCED"
                 reason = f"Search dynamics inside nominal bounds (Acc: {w_acc*100:.1f}%, Imp: {w_imp*100:.1f}%, Div: {div:.2f}). Steady cooling."
@@ -454,6 +513,9 @@ class AdaptiveTemperatureController:
             "cost_delta": None,
             "outcome": "PENDING",
             "ablation_mode": self.ablation_mode,
+            "reset_stagnation": reset_stagnation,
+            "total_reheats": self.total_reheats,
+            "alpha": round(self.alpha, 4),
         }
         self.decision_history.append(entry)
         return entry
@@ -705,6 +767,9 @@ async def run_adaptive_sa(
             recent_accepts.pop(0)
             recent_improvements.pop(0)
 
+        # Continuous step cooling governed by adaptive controller's alpha
+        controller.step_cool()
+
         # Update controller epoch every 40 iterations
         if iteration % 40 == 0:
             win_acc = sum(recent_accepts) / len(recent_accepts)
@@ -718,15 +783,22 @@ async def run_adaptive_sa(
                 stagnation=stagnation,
                 diversity=diversity,
                 current_best_cost=best_cost,
+                total_iterations=iterations,
             )
 
-            if "REHEAT" in decision_data["decision"] or "DIVERSIFICATION" in decision_data["decision"]:
-                total_reheats += 1
+            total_reheats = controller.total_reheats
+
+            if decision_data.get("reset_stagnation"):
+                stagnation = 0
+                route = best_route.copy()
+                current_cost = best_cost
                 if decision_data["decision"] == "STRUCTURAL_DIVERSIFICATION":
-                    # When diversity collapsed and deep stagnation, emphasize Or-Opt and Insert
-                    op_weights = {"2-opt": 0.35, "or-opt": 0.30, "insert": 0.20, "swap": 0.15}
+                    # Perturb with Or-Opt / Insert on diversity collapse
+                    op_weights = {"2-opt": 0.40, "or-opt": 0.30, "insert": 0.20, "swap": 0.10}
                 else:
-                    op_weights = {"2-opt": 0.50, "or-opt": 0.22, "insert": 0.18, "swap": 0.10}
+                    op_weights = {"2-opt": 0.55, "or-opt": 0.25, "insert": 0.12, "swap": 0.08}
+            elif decision_data["decision"] == "TERMINAL_QUENCH":
+                op_weights = {"2-opt": 0.88, "or-opt": 0.10, "insert": 0.02, "swap": 0.00}
             elif decision_data["mode"] == "EXPLOITATION":
                 # In exploitation mode, emphasize 2-opt and or-opt untangling
                 op_weights = {"2-opt": 0.80, "or-opt": 0.12, "insert": 0.05, "swap": 0.03}

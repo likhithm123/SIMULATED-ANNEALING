@@ -1278,15 +1278,26 @@
     function showBenchmarkModal() {
       const conv = benchmarkResults.conventional || { best_cost: 0, stagnation_events: 0 };
       const adapt = benchmarkResults.adaptive || { best_cost: 0, stagnation_events: 0 };
-      const diff = conv.best_cost - adapt.best_cost;
-      const pct = conv.best_cost > 0 ? ((diff / conv.best_cost) * 100).toFixed(1) : "0.0";
+      const isAdaptiveWinner = adapt.best_cost <= conv.best_cost;
+      const diff = Math.abs(conv.best_cost - adapt.best_cost);
+      const baseCost = Math.max(conv.best_cost, adapt.best_cost);
+      const pct = baseCost > 0 ? ((diff / baseCost) * 100).toFixed(1) : "0.0";
+
+      let convCell = `<td>${conv.best_cost.toFixed(1)}</td>`;
+      let adaptCell = `<td>${adapt.best_cost.toFixed(1)}</td>`;
+
+      if (isAdaptiveWinner) {
+        adaptCell = `<td class="winner-tag">${adapt.best_cost.toFixed(1)} 🏆 (${pct}% shorter)</td>`;
+      } else {
+        convCell = `<td class="winner-tag">${conv.best_cost.toFixed(1)} 🏆 (${pct}% shorter)</td>`;
+      }
 
       const tbody = document.getElementById("benchmarkTableBody");
       tbody.innerHTML = `
         <tr>
           <td>Final Best Route Cost</td>
-          <td>${conv.best_cost.toFixed(1)}</td>
-          <td class="winner-tag">${adapt.best_cost.toFixed(1)} (${pct}% better)</td>
+          ${convCell}
+          ${adaptCell}
         </tr>
         <tr>
           <td>Stagnation Escapes (Reheats)</td>
