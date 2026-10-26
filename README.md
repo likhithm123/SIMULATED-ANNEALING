@@ -80,57 +80,68 @@ flowchart TD
     C -->|Rejected| E[Increment Stagnation Counter]
     D --> F[Update Rolling Window 50 steps]
     E --> F
+    D --> F[Update Rolling Window 50 steps]
+    E --> F
     F --> G{Epoch Iteration % 40 == 0?}
     G -->|No| H[Apply Current Temperature]
-    G -->|Yes| I[Controller Sensor Evaluation]
-    I --> J{Stagnation >= 100?}
-    J -->|Yes| K["REHEAT (T * 1.35)"]
-    J -->|No| L{Acceptance < 5%?}
-    L -->|Yes| M["THAW_BOOST (T * 1.15)"]
-    L -->|No| N{Edge Diversity < 0.08?}
+    G -->|Yes| I[Simultaneous 4-Signal Priority Evaluation]
+    I --> J{Stagnation >= 100 AND Diversity < 0.08?}
+    J -->|Yes| K["STRUCTURAL_DIVERSIFICATION (T * 1.45)"]
+    J -->|No| L{Stagnation >= 100?}
+    L -->|Yes| M["LOCAL_MINIMA_REHEAT (T * 1.30)"]
+    L -->|No| N{Diversity < 0.08 AND Stagnation >= 50?}
     N -->|Yes| O["DIVERSITY_REHEAT (T * 1.20)"]
-    N -->|No| P{Improvement > 12%?}
-    P -->|Yes| Q["RAPID_COOL (T * 0.88)"]
-    P -->|No| R{Acceptance > 55%?}
-    R -->|Yes| S["MODERATE_COOL (T * 0.94)"]
-    R -->|No| T["STEADY_COOL (T * 0.985)"]
-    K --> U[Adjust Operator Probabilities]
-    M --> U
-    O --> U
-    Q --> U
-    S --> U
-    T --> U
-    U --> H
+    N -->|No| P{Acceptance < 5%?}
+    P -->|Yes| Q["THAW_BOOST (T * 1.15)"]
+    P -->|No| R{Improvement > 12%?}
+    R -->|Yes| S["RAPID_COOL (T * 0.88)"]
+    R -->|No| T{Acceptance > 55%?}
+    T -->|Yes| U["MODERATE_COOL (T * 0.94)"]
+    T -->|No| V["STEADY_COOL (T * 0.985)"]
+    K --> W[Dynamic Operator Re-Weighting]
+    M --> W
+    O --> W
+    Q --> W
+    S --> W
+    U --> W
+    V --> W
+    W --> H
 ```
 
-### 1. The Four Feedback Sensors
+### 1. Multi-Signal Priority Engine (Fixing Priority Inversion)
 
-| Sensor | Metric Monitored | Threshold & Logic | Purpose |
-| :--- | :--- | :--- | :--- |
-| **Stagnation Sensor** | Consecutive non-improving iterations | $\text{stagnation} \ge 100$ (with $\ge 40$ steps between reheats) | Detects convergence into a local trap and triggers a **Thermal Reheat** ($T \times 1.35$). |
-| **Acceptance Rate Sensor** | Rolling 50-step fraction of accepted moves | $\text{acceptance} < 0.05$ and $T < 0.7 \cdot T_{\max}$ | Detects premature freezing and triggers **Thaw Boost** ($T \times 1.15$) to restore mobility. |
-| **Edge Diversity Sensor** | Jaccard-like pairwise edge distance across past tours | $\text{diversity} < 0.08$ and $\text{stagnation} \ge 50$ | Detects topological lock-in (repeated cycling) and triggers **Diversity Reheat** ($T \times 1.20$). |
-| **Improvement Velocity Sensor** | Rolling 50-step fraction of accepted improvements | $\text{improvement} > 0.12$ or $\text{acceptance} > 0.55$ | Detects fertile downhill basins (**Rapid Cool** $T \times 0.88$) or excessive random drift (**Moderate Cool** $T \times 0.94$). |
+Previously, checking deep stagnation before diversity collapse caused priority shadowing where diversity-specific remedies were skipped. The upgraded controller resolves all 4 signals simultaneously via an explicit priority policy:
 
-### 2. State & Mode Decisions
+| Priority | Search Dynamics Signature | Controller Decision | Action & Multiplier | Search Mode | Strategic Purpose |
+| :--- | :--- | :--- | :--- | :--- | :--- |
+| **P1 (Highest)** | $S \ge 100$ **AND** $D < 0.08$ | `STRUCTURAL_DIVERSIFICATION` | $T \times 1.45$ + 30% Or-Opt & 20% Insert | **Exploration** | Catastrophic entrapment: breaks cyclic sub-tour traps by shifting operator weights away from 2-opt. |
+| **P2** | $S \ge 100$ ($D \ge 0.08$) | `LOCAL_MINIMA_REHEAT` | $T \times 1.30$ | **Exploration** | Deep stagnation in local valley while maintaining healthy topological variance. |
+| **P3** | $D < 0.08$ ($S \ge 50$) | `DIVERSITY_REHEAT` | $T \times 1.20$ | **Exploration** | Tour oscillating between identical topological edges; warms system to sample new configurations. |
+| **P4** | $W_{acc} < 0.05$ ($T < 0.7 T_{\max}$) | `THAW_BOOST` | $T \times 1.15$ | **Exploration** | Premature freeze; unfreezes the search to restore exploratory mobility. |
+| **P5** | $W_{imp} > 0.12$ | `RAPID_COOL` | $T \times 0.88$ + 80% 2-Opt | **Exploitation** | Fertile downhill gradient: accelerates cooling to converge onto the local basin minimum. |
+| **P6** | $W_{acc} > 0.55$ | `MODERATE_COOL` | $T \times 0.94$ | **Exploitation** | Overly loose search: quenches excess thermal energy to reduce random walk. |
+| **P7 (Nominal)**| Metrics inside envelope | `STEADY_COOL` | $T \times 0.985$ | **Balanced** | Smooth geometric cooling preserving search balance. |
 
-The controller assigns a descriptive tag, search mode, and human-readable reasoning to every adjustment:
+### 2. Native Ablation Study Suite
 
-- **`REHEAT` (Mode: EXPLORATION)**: Multiplies temperature by $1.35$. Injects kinetic energy so the tour can uncross complex knots and jump over high-energy saddle points.
-- **`THAW_BOOST` (Mode: EXPLORATION)**: Multiplies temperature by $1.15$. Unfreezes the search when acceptance drops below 5%.
-- **`DIVERSITY_REHEAT` (Mode: EXPLORATION)**: Multiplies temperature by $1.20$. Forces structural exploration when the edge pool has collapsed.
-- **`RAPID_COOL` (Mode: EXPLOITATION)**: Multiplies temperature by $0.88$. Quickly settles down to capture and lock in a discovered optimal basin.
-- **`MODERATE_COOL` (Mode: EXPLOITATION)**: Multiplies temperature by $0.94$. Tames overactive random wandering when acceptance exceeds 55%.
-- **`STEADY_COOL` (Mode: BALANCED)**: Multiplies temperature by $0.985$. Nominal steady cooling when search metrics reside within ideal bounds.
+To scientifically demonstrate which signals provide measurable benefits, the platform supports 7 execution modes:
+- **`full`**: Full multi-signal adaptive controller ($W_{acc}, W_{imp}, S, D$).
+- **`acceptance_only`**: Classic adaptive SA baseline adjusting temperature purely based on acceptance rate (Kirkpatrick / Aarts-Laarhoven).
+- **`standard_sa`**: Fixed open-loop geometric cooling schedule ($\alpha = 0.995$) with zero online feedback.
+- **`no_diversity`**: Ablation variant disabling edge diversity feedback ($D$ clamped to nominal $0.50$).
+- **`no_stagnation`**: Ablation variant disabling stagnation reheats ($S$ clamped to 0).
+- **`no_acceptance`**: Ablation variant disabling acceptance rate boosts and loose search cooling.
+- **`no_improvement`**: Ablation variant disabling fertile valley rapid cooling bursts.
 
-### 3. Dynamic Operator Weight Scheduling
+### 3. Dynamic Operator Weight Scheduling & Yield Tracking
 
-The neighborhood generator combines three stochastic moves with weights that adjust according to search state:
+The neighborhood generator combines four stochastic moves with weights that adjust dynamically:
+1. **2-Opt Inversion (65% nominal, 80% in exploitation)**: Inverts the sequence between two cut points. Directly untangles crossing edges without disrupting the rest of the tour.
+2. **Or-Opt Block Shift (15% nominal, 30% in structural diversification)**: Relocates a connected chain of 2 or 3 consecutive cities to another position in the tour. Preserves high-quality local subpaths while repairing global sequence.
+3. **Insertion / Relocation (12% nominal, 20% in structural diversification)**: Extracts a single city and relocates it into another position.
+4. **Random Swap (8% nominal, 15% in structural diversification)**: Swaps the indices of two distinct cities to break long-range linkages.
 
-1. **2-Opt Inversion (65% nominal, 80% in exploitation)**: Inverts the sequence between two cut points. Ideal for untangling intersecting edges without disturbing the rest of the tour.
-2. **Or-Opt Segment Shift (15% nominal, 25% in reheats)**: Relocates a connected chain of 2 or 3 consecutive cities to another position in the tour. Preserves high-quality local subpaths while repairing global routing flaws.
-3. **Insertion / Relocation (12% nominal, 20% in reheats)**: Extracts a single city and relocates it into another position. Provides medium-scale topological restructuring.
-4. **Random Swap (8% nominal, 15% in reheats)**: Swaps the indices of two distinct cities. Disrupts long-range edge linkages to escape stubborn basins.
+Every proposal tracks **acceptance yield** and **global improvement yield** in real time.
 
 ---
 

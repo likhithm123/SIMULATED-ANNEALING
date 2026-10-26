@@ -137,22 +137,58 @@ def test_edge_diversity_disjoint():
 
 
 # ============================================================
-# 4. ADAPTIVE CONTROLLER SENSOR TESTS
+# 4. ADAPTIVE CONTROLLER SENSOR & PRIORITY TESTS
 # ============================================================
 
-def test_adaptive_controller_reheat():
+def test_adaptive_controller_local_minima_reheat():
     controller = AdaptiveTemperatureController(initial_temperature=500.0)
-    # Stagnation >= 100 should trigger REHEAT
+    # Stagnation >= 100 with healthy diversity should trigger LOCAL_MINIMA_REHEAT
     res = controller.update(
         iteration=100,
         window_acceptance_rate=0.20,
         window_improvement_rate=0.02,
         stagnation=105,
         diversity=0.35,
+        current_best_cost=1200.0,
     )
-    assert res["decision"] == "REHEAT"
+    assert res["decision"] == "LOCAL_MINIMA_REHEAT"
     assert res["mode"] == "EXPLORATION"
+    assert "stagnation" in res["triggered_signals"]
     assert controller.temperature > 500.0
+
+
+def test_adaptive_controller_structural_diversification():
+    controller = AdaptiveTemperatureController(initial_temperature=500.0)
+    # Both Stagnation >= 100 and Diversity < 0.08 triggers STRUCTURAL_DIVERSIFICATION
+    res = controller.update(
+        iteration=100,
+        window_acceptance_rate=0.15,
+        window_improvement_rate=0.01,
+        stagnation=110,
+        diversity=0.04,
+        current_best_cost=1500.0,
+    )
+    assert res["decision"] == "STRUCTURAL_DIVERSIFICATION"
+    assert res["mode"] == "EXPLORATION"
+    assert "stagnation" in res["triggered_signals"]
+    assert "diversity" in res["triggered_signals"]
+    assert controller.temperature > 500.0 * 1.40
+
+
+def test_adaptive_controller_diversity_reheat():
+    controller = AdaptiveTemperatureController(initial_temperature=500.0)
+    # Moderate stagnation (>=50) + Diversity < 0.08 triggers DIVERSITY_REHEAT
+    res = controller.update(
+        iteration=100,
+        window_acceptance_rate=0.25,
+        window_improvement_rate=0.03,
+        stagnation=60,
+        diversity=0.05,
+        current_best_cost=1400.0,
+    )
+    assert res["decision"] == "DIVERSITY_REHEAT"
+    assert res["mode"] == "EXPLORATION"
+    assert "diversity" in res["triggered_signals"]
 
 
 def test_adaptive_controller_thaw():
@@ -185,8 +221,90 @@ def test_adaptive_controller_rapid_cool():
     assert controller.temperature < 600.0
 
 
+def test_controller_decision_outcome_tracking():
+    controller = AdaptiveTemperatureController(initial_temperature=500.0)
+    # Decision 1 at cost 1000
+    controller.update(
+        iteration=40,
+        window_acceptance_rate=0.02,
+        window_improvement_rate=0.01,
+        stagnation=10,
+        diversity=0.30,
+        current_best_cost=1000.0,
+    )
+    assert len(controller.decision_history) == 1
+    assert controller.decision_history[0]["outcome"] == "PENDING"
+
+    # Decision 2 at improved cost 950 -> Decision 1 outcome should be updated to IMPROVED
+    controller.update(
+        iteration=80,
+        window_acceptance_rate=0.30,
+        window_improvement_rate=0.15,
+        stagnation=0,
+        diversity=0.30,
+        current_best_cost=950.0,
+    )
+    assert "IMPROVED" in controller.decision_history[0]["outcome"]
+    assert controller.decision_history[0]["cost_delta"] == -50.0
+
+
 # ============================================================
-# 5. REST API ENDPOINT TESTS
+# 5. ABLATION MODES TESTS
+# ============================================================
+
+def test_ablation_no_diversity():
+    controller = AdaptiveTemperatureController(ablation_mode="no_diversity")
+    # Even if diversity is 0.02, it should NOT trigger DIVERSITY_REHEAT
+    res = controller.update(
+        iteration=40,
+        window_acceptance_rate=0.25,
+        window_improvement_rate=0.02,
+        stagnation=60,
+        diversity=0.02,
+    )
+    assert res["decision"] != "DIVERSITY_REHEAT"
+
+
+def test_ablation_no_stagnation():
+    controller = AdaptiveTemperatureController(ablation_mode="no_stagnation")
+    # Even if stagnation is 150, it should NOT trigger REHEAT
+    res = controller.update(
+        iteration=100,
+        window_acceptance_rate=0.25,
+        window_improvement_rate=0.02,
+        stagnation=150,
+        diversity=0.30,
+    )
+    assert "REHEAT" not in res["decision"]
+
+
+def test_ablation_acceptance_only():
+    controller = AdaptiveTemperatureController(ablation_mode="acceptance_only")
+    res_boost = controller.update(
+        iteration=40,
+        window_acceptance_rate=0.05,
+        window_improvement_rate=0.00,
+        stagnation=120,
+        diversity=0.01,
+    )
+    assert res_boost["decision"] == "ACCEPTANCE_BOOST"
+
+
+def test_ablation_standard_sa():
+    controller = AdaptiveTemperatureController(initial_temperature=600.0, ablation_mode="standard_sa")
+    res = controller.update(
+        iteration=40,
+        window_acceptance_rate=0.01,
+        window_improvement_rate=0.25,
+        stagnation=200,
+        diversity=0.01,
+    )
+    assert res["decision"] == "FIXED_COOL"
+    assert math.isclose(controller.temperature, 600.0 * 0.995, rel_tol=1e-3)
+
+
+# ============================================================
+# 6. BENCHMARK RUNNER & REST API TESTS
 # ============================================================
 
 client = TestClient(app)
@@ -198,6 +316,8 @@ def test_health_endpoint():
     assert data["status"] == "healthy"
     assert "berlin52" in data["distributions"]
     assert "or-opt" in data["operators"]
+    assert "full" in data["algorithms"]
+    assert "acceptance_only" in data["algorithms"]
 
 
 def test_presets_endpoint():
@@ -206,9 +326,35 @@ def test_presets_endpoint():
     data = response.json()
     assert len(data["distributions"]) >= 6
     assert "2-opt" in data["operators"]
+    assert "berlin52_optimum" in data
 
 
 def test_frontend_home():
     response = client.get("/")
     assert response.status_code == 200
     assert "text/html" in response.headers["content-type"]
+
+
+def test_benchmark_suite_api():
+    payload = {
+        "distribution": "berlin52",
+        "cities": 52,
+        "iterations": 200,
+        "seeds": [42, 101],
+        "algorithms": ["standard_sa", "full"],
+    }
+    response = client.post("/api/benchmark/suite", json=payload)
+    assert response.status_code == 200
+    data = response.json()
+    assert "summary" in data
+    assert "standard_sa" in data["summary"]
+    assert "full" in data["summary"]
+    assert data["summary"]["full"]["mean_cost"] > 0
+    assert len(data["raw_runs"]) == 4  # 2 algorithms x 2 seeds
+
+
+def test_benchmark_export_csv():
+    response = client.get("/api/benchmark/export_csv")
+    assert response.status_code == 200
+    assert "text/csv" in response.headers["content-type"]
+    assert "Algorithm,InitialCost,BestCost" in response.text

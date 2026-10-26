@@ -535,11 +535,111 @@
     .modal-table th {
       color: var(--text-muted);
       font-weight: 600;
+      background: rgba(255, 255, 255, 0.02);
     }
 
     .winner-tag {
       color: #10b981;
       font-weight: 700;
+    }
+
+    /* TABS */
+    .tab-btn {
+      background: transparent;
+      border: 1px solid var(--border-subtle);
+      color: var(--text-muted);
+      padding: 5px 12px;
+      border-radius: 6px;
+      font-size: 11px;
+      font-weight: 600;
+      font-family: 'Outfit', sans-serif;
+      cursor: pointer;
+      transition: all 0.2s;
+    }
+
+    .tab-btn:hover {
+      background: rgba(255, 255, 255, 0.05);
+      color: var(--text-main);
+    }
+
+    .tab-btn.active {
+      background: rgba(56, 189, 248, 0.15);
+      border-color: var(--primary);
+      color: var(--primary);
+    }
+
+    /* SIGNAL & OUTCOME CHIPS */
+    .chip {
+      display: inline-block;
+      padding: 2px 6px;
+      border-radius: 4px;
+      font-size: 10px;
+      font-weight: 600;
+      font-family: 'JetBrains Mono', monospace;
+      margin-right: 4px;
+      margin-top: 4px;
+    }
+
+    .chip-signal {
+      background: rgba(255, 255, 255, 0.08);
+      color: #cbd5e1;
+      border: 1px solid rgba(255, 255, 255, 0.1);
+    }
+
+    .chip-improved {
+      background: rgba(16, 185, 129, 0.2);
+      color: #34d399;
+      border: 1px solid rgba(16, 185, 129, 0.3);
+    }
+
+    .chip-stable {
+      background: rgba(100, 116, 139, 0.2);
+      color: #94a3b8;
+    }
+
+    /* OPERATOR BREAKDOWN CARD */
+    .op-row {
+      margin-bottom: 12px;
+    }
+
+    .op-row-header {
+      display: flex;
+      justify-content: space-between;
+      font-size: 11px;
+      font-weight: 600;
+      margin-bottom: 4px;
+      color: var(--text-muted);
+    }
+
+    .op-bar-track {
+      height: 8px;
+      background: rgba(255, 255, 255, 0.06);
+      border-radius: 4px;
+      overflow: hidden;
+      display: flex;
+    }
+
+    .op-bar-fill-accept {
+      background: var(--primary);
+      height: 100%;
+    }
+
+    .op-bar-fill-improve {
+      background: var(--success);
+      height: 100%;
+    }
+
+    /* SUITE MODAL (EXPANDED) */
+    .suite-modal-card {
+      background: #0f172a;
+      border: 1px solid var(--border-highlight);
+      border-radius: 16px;
+      width: 95%;
+      max-width: 960px;
+      max-height: 88vh;
+      overflow-y: auto;
+      padding: 28px;
+      box-shadow: 0 25px 50px rgba(0, 0, 0, 0.7);
     }
   </style>
 </head>
@@ -566,9 +666,14 @@
       <div class="field-item">
         <label>Algorithm</label>
         <select id="algorithm">
-          <option value="adaptive">Adaptive Simulated Annealing (Feedback Control)</option>
-          <option value="conventional">Conventional SA (Fixed Cooling Schedule)</option>
-          <option value="compare">Benchmark: Side-by-Side (Conventional vs Adaptive)</option>
+          <option value="adaptive">Full Adaptive SA (All 4 Feedback Signals)</option>
+          <option value="acceptance_only">Adaptive Cooling (Acceptance Rate Only)</option>
+          <option value="standard_sa">Standard SA (Blind Geometric Cooling)</option>
+          <option value="no_diversity">Ablation: No Diversity Signal</option>
+          <option value="no_stagnation">Ablation: No Stagnation Reheats</option>
+          <option value="no_acceptance">Ablation: No Acceptance Feedback</option>
+          <option value="no_improvement">Ablation: No Fertile Rapid Cool</option>
+          <option value="compare">Benchmark: Side-by-Side (Standard vs Full)</option>
         </select>
       </div>
 
@@ -580,7 +685,7 @@
           <option value="circular">Circular Ring Topology</option>
           <option value="grid">Manhattan Grid Lattice</option>
           <option value="spiral">Archimedean Spiral</option>
-          <option value="berlin52">Berlin52 (TSPLIB Benchmark)</option>
+          <option value="berlin52">Berlin52 (TSPLIB Benchmark - Opt: 2618.3)</option>
         </select>
       </div>
 
@@ -619,10 +724,13 @@
       <button class="btn btn-secondary" id="btnClear" onclick="generateNewCities()">
         🎲 New Seed
       </button>
+      <button class="btn btn-primary" id="btnSuite" onclick="openSuiteModal()" style="background: linear-gradient(135deg, #6366f1, #8b5cf6); box-shadow: 0 4px 14px rgba(139, 92, 246, 0.35);" title="Run automated multi-seed benchmark & ablation study">
+        🔬 Benchmark Suite
+      </button>
       <button class="btn btn-secondary" id="btnExportJson" onclick="exportRouteJSON()" title="Export optimal route coordinates and indices as JSON">
         📥 JSON
       </button>
-      <button class="btn btn-secondary" id="btnExportCsv" onclick="exportHistoryCSV()" title="Export iteration convergence telemetry as CSV">
+      <button class="btn btn-secondary" id="btnExportCsv" onclick="exportHistoryCSV()" title="Export iteration convergence and decision telemetry as CSV">
         📊 CSV
       </button>
       <button class="btn btn-secondary" id="btnAudio" onclick="toggleAudio()" title="Toggle Web Audio feedback on reheats and completion">
@@ -705,11 +813,14 @@
         </div>
       </div>
 
-      <!-- TEMPERATURE & FEEDBACK LOG -->
+      <!-- TEMPERATURE & FEEDBACK LOG / OPERATORS -->
       <div class="card-panel">
-        <div class="card-panel-header">
-          <h2>🧠 Adaptive Controller Decisions & Temperature</h2>
-          <span style="font-size: 11px; color: var(--text-dim);">Live reasoning stream</span>
+        <div class="card-panel-header" style="flex-wrap: wrap; gap: 8px;">
+          <div style="display: flex; gap: 6px;">
+            <button class="tab-btn active" id="tabDecisions" onclick="switchRightTab('decisions')">🧠 Explainable Decisions</button>
+            <button class="tab-btn" id="tabOperators" onclick="switchRightTab('operators')">⚙️ Operator Yields</button>
+          </div>
+          <span style="font-size: 11px; color: var(--text-dim);" id="rightTabSub">Live reasoning stream</span>
         </div>
         <div class="log-stream" id="decisionLog">
           <div class="log-item">
@@ -718,6 +829,51 @@
               <span>Iteration 0</span>
             </div>
             <div>Select an algorithm and click <strong>Start Run</strong> to initiate real-time optimization.</div>
+          </div>
+        </div>
+        <div id="operatorPanel" style="display: none; padding: 12px 6px;">
+          <div class="op-row">
+            <div class="op-row-header">
+              <span>2-Opt (Subsegment Inversion)</span>
+              <span id="opStats2Opt">0 moves · 0.0% accepted · 0.0% improved</span>
+            </div>
+            <div class="op-bar-track">
+              <div class="op-bar-fill-accept" id="barAccept2Opt" style="width: 0%;"></div>
+              <div class="op-bar-fill-improve" id="barImprove2Opt" style="width: 0%;"></div>
+            </div>
+          </div>
+          <div class="op-row">
+            <div class="op-row-header">
+              <span>Or-Opt (Block Relocation)</span>
+              <span id="opStatsOrOpt">0 moves · 0.0% accepted · 0.0% improved</span>
+            </div>
+            <div class="op-bar-track">
+              <div class="op-bar-fill-accept" id="barAcceptOrOpt" style="width: 0%;"></div>
+              <div class="op-bar-fill-improve" id="barImproveOrOpt" style="width: 0%;"></div>
+            </div>
+          </div>
+          <div class="op-row">
+            <div class="op-row-header">
+              <span>Insert (Single Relocation)</span>
+              <span id="opStatsInsert">0 moves · 0.0% accepted · 0.0% improved</span>
+            </div>
+            <div class="op-bar-track">
+              <div class="op-bar-fill-accept" id="barAcceptInsert" style="width: 0%;"></div>
+              <div class="op-bar-fill-improve" id="barImproveInsert" style="width: 0%;"></div>
+            </div>
+          </div>
+          <div class="op-row">
+            <div class="op-row-header">
+              <span>Swap (City Exchange)</span>
+              <span id="opStatsSwap">0 moves · 0.0% accepted · 0.0% improved</span>
+            </div>
+            <div class="op-bar-track">
+              <div class="op-bar-fill-accept" id="barAcceptSwap" style="width: 0%;"></div>
+              <div class="op-bar-fill-improve" id="barImproveSwap" style="width: 0%;"></div>
+            </div>
+          </div>
+          <div style="font-size: 11px; color: var(--text-dim); margin-top: 14px; line-height: 1.5;">
+            🟦 <strong>Blue:</strong> Accepted Moves | 🟩 <strong>Green:</strong> Global Best Improvements
           </div>
         </div>
       </div>
@@ -763,6 +919,76 @@
       <div style="display: flex; justify-content: flex-end; margin-top: 16px;">
         <button class="btn btn-primary" onclick="closeModal()">Close</button>
       </div>
+    </div>
+  </div>
+
+  <!-- MULTI-SEED BENCHMARK & ABLATION STUDY MODAL -->
+  <div class="modal-overlay" id="suiteModal">
+    <div class="suite-modal-card">
+      <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 14px;">
+        <div class="modal-title" style="margin-bottom: 0;">🔬 Multi-Seed Benchmark & Ablation Study Studio</div>
+        <button class="btn btn-secondary" onclick="closeSuiteModal()">✕ Close</button>
+      </div>
+      <p style="color: var(--text-muted); font-size: 13px; margin-bottom: 16px;">
+        Runs identical coordinates, initial routes, and evaluation budgets across multiple random seeds to measure statistical significance.
+      </p>
+
+      <!-- Suite Config Bar -->
+      <div style="display: flex; flex-wrap: wrap; gap: 14px; align-items: center; padding: 14px; background: rgba(0,0,0,0.3); border-radius: 10px; border: 1px solid var(--border-subtle); margin-bottom: 16px;">
+        <div class="field-item">
+          <label>Topology</label>
+          <select id="suiteDist">
+            <option value="berlin52">Berlin52 (TSPLIB Known Opt: 2618.3)</option>
+            <option value="clustered">Clustered Logistics Hubs</option>
+            <option value="random">Random Scatter</option>
+            <option value="grid">Manhattan Grid Lattice</option>
+            <option value="circular">Circular Ring</option>
+          </select>
+        </div>
+        <div class="field-item">
+          <label>Random Seeds</label>
+          <select id="suiteSeeds">
+            <option value="3">3 Seeds (Fast check)</option>
+            <option value="5" selected>5 Seeds (Standard benchmark)</option>
+            <option value="10">10 Seeds (High precision)</option>
+          </select>
+        </div>
+        <div class="field-item">
+          <label>Evaluation Budget</label>
+          <select id="suiteBudget">
+            <option value="1000">1000 Iterations</option>
+            <option value="1500" selected>1500 Iterations</option>
+            <option value="2500">2500 Iterations</option>
+          </select>
+        </div>
+        <div style="margin-top: 16px; display: flex; gap: 8px;">
+          <button class="btn btn-primary" id="btnRunSuite" onclick="executeSuiteBenchmark()">
+            ⚡ Run Benchmark Suite
+          </button>
+          <button class="btn btn-secondary" id="btnDownloadSuiteCsv" onclick="downloadSuiteCSV()" disabled>
+            📥 Export CSV
+          </button>
+        </div>
+      </div>
+
+      <div id="suiteStatus" style="font-size: 12px; color: var(--primary); margin-bottom: 10px; font-family: 'JetBrains Mono', monospace; display: none;"></div>
+
+      <!-- Results Table -->
+      <table class="modal-table" id="suiteResultsTable" style="display: none;">
+        <thead>
+          <tr>
+            <th>Algorithm / Ablation Variant</th>
+            <th>Mean Cost ± Std</th>
+            <th>Median (IQR)</th>
+            <th>Opt Gap %</th>
+            <th>Mean Reheats</th>
+            <th>Time (ms)</th>
+          </tr>
+        </thead>
+        <tbody id="suiteTableBody">
+          <!-- Populated by JS -->
+        </tbody>
+      </table>
     </div>
   </div>
 
@@ -945,6 +1171,11 @@
         document.getElementById("kpiReheats").innerText = `${data.total_reheats} reheat events`;
       }
 
+      // Update Operator Breakdown Panel
+      if (data.operator_stats) {
+        updateOperatorPanel(data.operator_stats);
+      }
+
       // Update Mode Badge
       const modeEl = document.getElementById("kpiMode");
       modeEl.innerText = data.mode;
@@ -954,7 +1185,7 @@
       );
 
       // Chart updates
-      const isConventional = data.algorithm.includes("Conventional");
+      const isConventional = data.algorithm && data.algorithm.includes("Conventional");
       const datasetIndex = isConventional && isBenchmarkMode ? 1 : 0;
       
       if (isBenchmarkMode && isConventional) {
@@ -976,12 +1207,25 @@
       const item = document.createElement("div");
       
       let badgeClass = "";
-      if (data.decision.includes("REHEAT") || data.decision.includes("BOOST")) {
+      if (data.decision.includes("REHEAT") || data.decision.includes("BOOST") || data.decision.includes("DIVERSIFICATION")) {
         badgeClass = "reheat";
       } else if (data.decision.includes("RAPID")) {
         badgeClass = "rapid";
       } else if (data.decision.includes("COOL")) {
         badgeClass = "cool";
+      }
+
+      // Render triggered signals chips
+      let signalChips = "";
+      if (data.triggered_signals && data.triggered_signals.length > 0) {
+        signalChips = data.triggered_signals.map(s => `<span class="chip chip-signal">⚡ ${s}</span>`).join("");
+      }
+
+      // Render outcome chip if present
+      let outcomeChip = "";
+      if (data.outcome && data.outcome !== "PENDING") {
+        const isImp = data.outcome.includes("IMPROVED");
+        outcomeChip = `<span class="chip ${isImp ? 'chip-improved' : 'chip-stable'}">${data.outcome}</span>`;
       }
 
       item.className = `log-item ${badgeClass}`;
@@ -993,7 +1237,8 @@
           </span>
           <span>Iter ${data.iteration} | T: ${typeof data.temperature === 'number' ? data.temperature.toFixed(1) : data.temperature}</span>
         </div>
-        <div>${data.reason}</div>
+        <div style="font-size: 12px; margin-bottom: 4px;">${data.reason}</div>
+        <div>${signalChips}${outcomeChip}</div>
       `;
 
       stream.prepend(item);
@@ -1288,6 +1533,144 @@
       a.download = `tsp_optimal_route_${Date.now()}.json`;
       a.click();
       URL.revokeObjectURL(url);
+    }
+
+    function updateOperatorPanel(stats) {
+      if (!stats) return;
+      const opKeys = [
+        { key: "2-opt", statId: "opStats2Opt", barAccept: "barAccept2Opt", barImp: "barImprove2Opt" },
+        { key: "or-opt", statId: "opStatsOrOpt", barAccept: "barAcceptOrOpt", barImp: "barImproveOrOpt" },
+        { key: "insert", statId: "opStatsInsert", barAccept: "barAcceptInsert", barImp: "barImproveInsert" },
+        { key: "swap", statId: "opStatsSwap", barAccept: "barAcceptSwap", barImp: "barImproveSwap" },
+      ];
+
+      opKeys.forEach(item => {
+        const s = stats[item.key] || { proposed: 0, accepted: 0, improved: 0 };
+        const accPct = s.proposed > 0 ? ((s.accepted / s.proposed) * 100).toFixed(1) : "0.0";
+        const impPct = s.proposed > 0 ? ((s.improved / s.proposed) * 100).toFixed(1) : "0.0";
+        const labelEl = document.getElementById(item.statId);
+        if (labelEl) {
+          labelEl.innerText = `${s.proposed} moves · ${accPct}% accepted · ${impPct}% improved`;
+        }
+        const bAcc = document.getElementById(item.barAccept);
+        const bImp = document.getElementById(item.barImp);
+        if (bAcc) bAcc.style.width = `${Math.min(100, parseFloat(accPct))}%`;
+        if (bImp) bImp.style.width = `${Math.min(100, parseFloat(impPct))}%`;
+      });
+    }
+
+    function switchRightTab(tab) {
+      const tabDec = document.getElementById("tabDecisions");
+      const tabOps = document.getElementById("tabOperators");
+      const logEl = document.getElementById("decisionLog");
+      const opEl = document.getElementById("operatorPanel");
+      const sub = document.getElementById("rightTabSub");
+
+      if (tab === "decisions") {
+        tabDec.classList.add("active");
+        tabOps.classList.remove("active");
+        logEl.style.display = "flex";
+        opEl.style.display = "none";
+        sub.innerText = "Live reasoning stream";
+      } else {
+        tabDec.classList.remove("active");
+        tabOps.classList.add("active");
+        logEl.style.display = "none";
+        opEl.style.display = "block";
+        sub.innerText = "Neighborhood operator yields";
+      }
+    }
+
+    let latestSuiteResults = null;
+
+    function openSuiteModal() {
+      document.getElementById("suiteModal").style.display = "flex";
+    }
+
+    function closeSuiteModal() {
+      document.getElementById("suiteModal").style.display = "none";
+    }
+
+    async function executeSuiteBenchmark() {
+      const btn = document.getElementById("btnRunSuite");
+      const statusEl = document.getElementById("suiteStatus");
+      const table = document.getElementById("suiteResultsTable");
+      const tbody = document.getElementById("suiteTableBody");
+      const btnCsv = document.getElementById("btnDownloadSuiteCsv");
+
+      btn.disabled = true;
+      btn.innerText = "⏳ Running Suite...";
+      statusEl.style.display = "block";
+      statusEl.innerText = "Executing identical seeds across standard SA, adaptive cooling, full ASA, and ablation models...";
+
+      const dist = document.getElementById("suiteDist").value;
+      const seedCount = parseInt(document.getElementById("suiteSeeds").value) || 5;
+      const budget = parseInt(document.getElementById("suiteBudget").value) || 1500;
+
+      const seedList = [];
+      for (let i = 0; i < seedCount; i++) seedList.push(42 + i * 137);
+
+      const payload = {
+        distribution: dist,
+        cities: dist === "berlin52" ? 52 : parseInt(document.getElementById("cities").value) || 50,
+        iterations: budget,
+        seeds: seedList,
+        algorithms: [
+          "standard_sa",
+          "acceptance_only",
+          "full",
+          "no_diversity",
+          "no_stagnation",
+          "no_improvement"
+        ]
+      };
+
+      try {
+        const resp = await fetch("/api/benchmark/suite", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(payload)
+        });
+        const data = await resp.json();
+        latestSuiteResults = data;
+
+        tbody.innerHTML = "";
+        const summary = data.summary;
+        const sorted = Object.values(summary).sort((a, b) => a.mean_cost - b.mean_cost);
+
+        sorted.forEach((item, idx) => {
+          const isBest = idx === 0;
+          const tr = document.createElement("tr");
+          const gapStr = item.mean_optimality_gap_pct !== null && item.mean_optimality_gap_pct !== undefined ? `${item.mean_optimality_gap_pct}%` : "—";
+          tr.innerHTML = `
+            <td style="font-weight: 700; color: ${isBest ? '#10b981' : '#cbd5e1'}">
+              ${isBest ? '👑 ' : ''}${item.algorithm}
+            </td>
+            <td>${item.mean_cost.toFixed(1)} ± ${item.std_cost.toFixed(1)}</td>
+            <td>${item.median_cost.toFixed(1)} (${item.iqr_cost.toFixed(1)})</td>
+            <td style="color: ${item.mean_optimality_gap_pct !== null && item.mean_optimality_gap_pct < 15 ? '#10b981' : '#f59e0b'}">
+              ${gapStr}
+            </td>
+            <td>${item.mean_reheats}</td>
+            <td>${item.mean_runtime_ms} ms</td>
+          `;
+          tbody.appendChild(tr);
+        });
+
+        table.style.display = "table";
+        btnCsv.disabled = false;
+        statusEl.innerText = `✓ Completed benchmark across ${seedCount} seeds! Top performer: ${sorted[0].algorithm} (${sorted[0].mean_cost} mean length).`;
+      } catch (err) {
+        console.error("Benchmark error:", err);
+        statusEl.innerText = `❌ Error running benchmark: ${err.message}`;
+      } finally {
+        btn.disabled = false;
+        btn.innerText = "⚡ Run Benchmark Suite";
+      }
+    }
+
+    function downloadSuiteCSV() {
+      window.location.href = "/api/benchmark/export_csv";
     }
 
     function exportHistoryCSV() {

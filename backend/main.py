@@ -4,12 +4,12 @@ import math
 import os
 import random
 from pathlib import Path
-from typing import Dict, List, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
 
 import numpy as np
 from fastapi import FastAPI, WebSocket, WebSocketDisconnect
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse
+from fastapi.responses import FileResponse, HTMLResponse, Response
 from fastapi.staticfiles import StaticFiles
 
 BASE_DIR = Path(__file__).resolve().parent
@@ -96,15 +96,15 @@ def generate_cities(n: int, seed: int = 42, distribution: str = "random") -> Lis
         raw_berlin = [
             (565.0, 575.0), (25.0, 185.0), (345.0, 750.0), (945.0, 685.0), (845.0, 655.0),
             (880.0, 660.0), (25.0, 230.0), (525.0, 1000.0), (580.0, 1175.0), (650.0, 1130.0),
-            (1605.0, 620.0), (1220.0, 580.0), (1465.0, 1420.0), (1530.0, 1205.0), (845.0, 180.0),
+            (1605.0, 620.0), (1220.0, 580.0), (1465.0, 200.0), (1530.0, 5.0), (845.0, 680.0),
             (725.0, 370.0), (145.0, 665.0), (415.0, 635.0), (510.0, 875.0), (560.0, 365.0),
             (300.0, 465.0), (520.0, 585.0), (480.0, 415.0), (835.0, 625.0), (975.0, 580.0),
             (1215.0, 245.0), (1320.0, 315.0), (1250.0, 400.0), (660.0, 180.0), (410.0, 250.0),
             (420.0, 555.0), (575.0, 665.0), (1150.0, 1160.0), (700.0, 580.0), (685.0, 595.0),
-            (750.0, 420.0), (420.0, 310.0), (495.0, 425.0), (520.0, 455.0), (575.0, 840.0),
-            (1230.0, 800.0), (1320.0, 730.0), (1440.0, 805.0), (1050.0, 20.0), (630.0, 160.0),
-            (500.0, 930.0), (1010.0, 1125.0), (1140.0, 1075.0), (690.0, 770.0), (830.0, 610.0),
-            (605.0, 625.0), (595.0, 360.0)
+            (685.0, 610.0), (770.0, 610.0), (795.0, 645.0), (720.0, 635.0), (760.0, 650.0),
+            (475.0, 960.0), (95.0, 260.0), (875.0, 920.0), (700.0, 500.0), (555.0, 815.0),
+            (830.0, 485.0), (1170.0, 65.0), (830.0, 610.0), (605.0, 625.0), (595.0, 360.0),
+            (1340.0, 725.0), (1740.0, 245.0)
         ]
         min_x = min(c[0] for c in raw_berlin)
         max_x = max(c[0] for c in raw_berlin)
@@ -262,9 +262,21 @@ def calculate_diversity(history_edges: List[Set[frozenset]], n_cities: int) -> f
 
 class AdaptiveTemperatureController:
     """
-    Online Feedback Controller for Simulated Annealing.
-    Monitors search dynamics (acceptance rate, improvement rate, stagnation, diversity)
-    over rolling execution epochs and dynamically adjusts temperature.
+    Online Feedback Controller for Simulated Annealing with Multi-Signal Priority Engine.
+    Simultaneously analyzes 4 search dynamics:
+      1. Acceptance Rate (W_acc)
+      2. Improvement Rate (W_imp)
+      3. Stagnation Count (S)
+      4. Edge Diversity (D)
+
+    Supports ablation modes:
+      - 'full': all 4 signals evaluated with explicit multi-signal priority policy
+      - 'no_diversity': ignores diversity metrics (D forced to nominal 0.50)
+      - 'no_stagnation': ignores stagnation metrics (S forced to 0, no reheats)
+      - 'no_acceptance': ignores acceptance rate adaptations (W_acc forced to nominal 0.25)
+      - 'no_improvement': ignores fertile valley rapid cooling (W_imp forced to nominal 0.05)
+      - 'acceptance_only': classical adaptive SA baseline responding purely to acceptance rate
+      - 'standard_sa': fixed geometric cooling (no online feedback)
     """
 
     def __init__(
@@ -272,20 +284,27 @@ class AdaptiveTemperatureController:
         initial_temperature: float = 600.0,
         min_temperature: float = 0.05,
         max_temperature: float = 1200.0,
+        ablation_mode: str = "full",
+        reheat_cooldown: int = 40,
     ):
         self.temperature = initial_temperature
         self.initial_temperature = initial_temperature
         self.min_temperature = min_temperature
         self.max_temperature = max_temperature
+        self.ablation_mode = ablation_mode
+        self.reheat_cooldown = reheat_cooldown
 
-        # Adaptation hyper-parameters
-        self.reheat_multiplier = 1.35
+        # Multipliers
+        self.reheat_structural_multiplier = 1.45
+        self.reheat_local_multiplier = 1.30
+        self.reheat_diversity_multiplier = 1.20
         self.boost_multiplier = 1.15
         self.cool_rapid_multiplier = 0.88
         self.cool_moderate_multiplier = 0.94
         self.cool_steady_multiplier = 0.985
 
-        self.last_reheat_iteration = 0
+        self.last_reheat_iteration = -100
+        self.decision_history: List[Dict[str, Any]] = []
 
     def update(
         self,
@@ -294,65 +313,150 @@ class AdaptiveTemperatureController:
         window_improvement_rate: float,
         stagnation: int,
         diversity: float,
-    ) -> Dict[str, any]:
+        current_best_cost: Optional[float] = None,
+    ) -> Dict[str, Any]:
         old_temp = self.temperature
 
-        decision = "STEADY_COOL"
-        mode = "BALANCED"
-        reason = "Normal geometric cooldown maintaining search balance."
+        # Apply ablation filters
+        w_acc = window_acceptance_rate if self.ablation_mode not in ("no_acceptance", "standard_sa") else 0.25
+        w_imp = window_improvement_rate if self.ablation_mode not in ("no_improvement", "standard_sa", "acceptance_only") else 0.05
+        stag = stagnation if self.ablation_mode not in ("no_stagnation", "standard_sa", "acceptance_only") else 0
+        div = diversity if self.ablation_mode not in ("no_diversity", "standard_sa", "acceptance_only") else 0.50
 
-        # Case 1: Deep Stagnation Trapped in Local Minimum -> REHEAT
-        # Avoid repeated immediate reheating within 40 iterations
-        if stagnation >= 100 and (iteration - self.last_reheat_iteration) >= 40:
-            self.temperature = min(self.max_temperature, self.temperature * self.reheat_multiplier)
-            decision = "REHEAT"
-            mode = "EXPLORATION"
-            reason = f"Stagnation reached {stagnation} steps. Reheating to escape local minimum valley."
-            self.last_reheat_iteration = iteration
+        # Update outcome of previous decision if exists
+        if self.decision_history and current_best_cost is not None:
+            prev = self.decision_history[-1]
+            if prev.get("cost_at_decision") is not None:
+                cost_delta = round(current_best_cost - prev["cost_at_decision"], 2)
+                prev["cost_delta"] = cost_delta
+                if cost_delta < -0.01:
+                    prev["outcome"] = f"IMPROVED ({cost_delta})"
+                elif cost_delta > 0.01:
+                    prev["outcome"] = f"REGRESSED (+{cost_delta})"
+                else:
+                    prev["outcome"] = "STABLE"
 
-        # Case 2: System is Freezing Prematurely (acceptance < 5%) -> THAW
-        elif window_acceptance_rate < 0.05 and self.temperature < (self.max_temperature * 0.7):
-            self.temperature = min(self.max_temperature, self.temperature * self.boost_multiplier)
-            decision = "THAW_BOOST"
-            mode = "EXPLORATION"
-            reason = f"Low acceptance rate ({window_acceptance_rate*100:.1f}%). Boosting temperature to unfreeze."
+        can_reheat = (iteration - self.last_reheat_iteration) >= self.reheat_cooldown
 
-        # Case 3: Population diversity collapsed into identical loops
-        elif diversity < 0.08 and stagnation >= 50 and (iteration - self.last_reheat_iteration) >= 40:
-            self.temperature = min(self.max_temperature, self.temperature * 1.20)
-            decision = "DIVERSITY_REHEAT"
-            mode = "EXPLORATION"
-            reason = f"Diversity collapsed to {diversity:.2f}. Warming system to sample diverse topologies."
-            self.last_reheat_iteration = iteration
+        # --- ABLATION BASELINE: Standard SA (Blind geometric cooling) ---
+        if self.ablation_mode == "standard_sa":
+            self.temperature = max(self.min_temperature, self.temperature * 0.995)
+            decision = "FIXED_COOL"
+            mode = "BALANCED"
+            reason = "Standard SA baseline: Fixed open-loop geometric cooling (alpha=0.995)."
+            triggered_signals = []
 
-        # Case 4: Fertile valley discovered (high improvement rate) -> RAPID COOL TO EXPLOIT
-        elif window_improvement_rate > 0.12:
-            self.temperature = max(self.min_temperature, self.temperature * self.cool_rapid_multiplier)
-            decision = "RAPID_COOL"
-            mode = "EXPLOITATION"
-            reason = f"Rapid progress ({window_improvement_rate*100:.1f}% improvements). Cooling quickly to converge."
+        # --- ABLATION BASELINE: Acceptance-Only Adaptive SA ---
+        elif self.ablation_mode == "acceptance_only":
+            if w_acc < 0.15:
+                self.temperature = min(self.max_temperature, self.temperature * 1.10)
+                decision = "ACCEPTANCE_BOOST"
+                mode = "EXPLORATION"
+                reason = f"Acceptance rate low ({w_acc*100:.1f}% < 15%). Boosting temperature."
+                triggered_signals = ["acceptance"]
+            elif w_acc > 0.40:
+                self.temperature = max(self.min_temperature, self.temperature * 0.92)
+                decision = "ACCEPTANCE_COOL"
+                mode = "EXPLOITATION"
+                reason = f"Acceptance rate high ({w_acc*100:.1f}% > 40%). Quenching temperature."
+                triggered_signals = ["acceptance"]
+            else:
+                self.temperature = max(self.min_temperature, self.temperature * 0.985)
+                decision = "STEADY_COOL"
+                mode = "BALANCED"
+                reason = f"Acceptance rate nominal ({w_acc*100:.1f}% in [15%, 40%]). Steady cooling."
+                triggered_signals = []
 
-        # Case 5: Overly loose search (acceptance > 55%) -> MODERATE COOL
-        elif window_acceptance_rate > 0.55:
-            self.temperature = max(self.min_temperature, self.temperature * self.cool_moderate_multiplier)
-            decision = "MODERATE_COOL"
-            mode = "EXPLOITATION"
-            reason = f"Acceptance high ({window_acceptance_rate*100:.1f}%). Cooling down to reduce random drift."
-
-        # Case 6: Standard nominal cooling
+        # --- FULL MULTI-SIGNAL CONTROLLER (Explicit Priority Policy) ---
         else:
-            self.temperature = max(self.min_temperature, self.temperature * self.cool_steady_multiplier)
-            decision = "STEADY_COOL"
-            mode = "EXPLOITATION"
-            reason = "Acceptance and diversity in target envelope. Gradual steady cooling."
+            is_deep_stagnation = (stag >= 100)
+            is_diversity_collapsed = (div < 0.08)
+            is_moderate_stagnation = (stag >= 50)
+            is_freezing = (w_acc < 0.05 and self.temperature < (self.max_temperature * 0.70))
+            is_fertile_valley = (w_imp > 0.12)
+            is_overly_loose = (w_acc > 0.55)
 
-        return {
-            "old_temperature": round(old_temp, 2),
-            "new_temperature": round(self.temperature, 2),
+            # Priority 1: Catastrophic Entrapment (Both Deep Stagnation AND Diversity Collapse)
+            # Evaluates signals simultaneously to prevent priority inversion
+            if is_deep_stagnation and is_diversity_collapsed and can_reheat:
+                self.temperature = min(self.max_temperature, self.temperature * self.reheat_structural_multiplier)
+                decision = "STRUCTURAL_DIVERSIFICATION"
+                mode = "EXPLORATION"
+                reason = f"Dual Trigger: Stagnation={stag} steps & Diversity={div:.3f} < 0.08. Major reheat and topological perturbation."
+                triggered_signals = ["stagnation", "diversity"]
+                self.last_reheat_iteration = iteration
+
+            # Priority 2: Deep Stagnation with Preserved Diversity (Local Minimum Basin)
+            elif is_deep_stagnation and can_reheat:
+                self.temperature = min(self.max_temperature, self.temperature * self.reheat_local_multiplier)
+                decision = "LOCAL_MINIMA_REHEAT"
+                mode = "EXPLORATION"
+                reason = f"Stagnation={stag} steps in local basin. Reheating while maintaining topological diversity ({div:.2f})."
+                triggered_signals = ["stagnation"]
+                self.last_reheat_iteration = iteration
+
+            # Priority 3: Diversity Collapse at Moderate Stagnation (Cyclic Tour Loops)
+            elif is_diversity_collapsed and is_moderate_stagnation and can_reheat:
+                self.temperature = min(self.max_temperature, self.temperature * self.reheat_diversity_multiplier)
+                decision = "DIVERSITY_REHEAT"
+                mode = "EXPLORATION"
+                reason = f"Diversity collapsed to {div:.3f} with stagnation={stag}. Warming system to sample diverse topologies."
+                triggered_signals = ["diversity", "stagnation"]
+                self.last_reheat_iteration = iteration
+
+            # Priority 4: Critical Freezing Risk (Low Acceptance)
+            elif is_freezing:
+                self.temperature = min(self.max_temperature, self.temperature * self.boost_multiplier)
+                decision = "THAW_BOOST"
+                mode = "EXPLORATION"
+                reason = f"Premature freeze: Acceptance={w_acc*100:.1f}% < 5%. Boosting temperature to restore mobility."
+                triggered_signals = ["acceptance"]
+
+            # Priority 5: Fertile Gradient Discovery (Rapid Progress in Attraction Basin)
+            elif is_fertile_valley:
+                self.temperature = max(self.min_temperature, self.temperature * self.cool_rapid_multiplier)
+                decision = "RAPID_COOL"
+                mode = "EXPLOITATION"
+                reason = f"Fertile valley: Improvement rate={w_imp*100:.1f}% > 12%. Rapid cooling to accelerate convergence."
+                triggered_signals = ["improvement"]
+
+            # Priority 6: High Random Drift (Overly Loose Search)
+            elif is_overly_loose:
+                self.temperature = max(self.min_temperature, self.temperature * self.cool_moderate_multiplier)
+                decision = "MODERATE_COOL"
+                mode = "EXPLOITATION"
+                reason = f"Acceptance high ({w_acc*100:.1f}% > 55%). Cooling to reduce random Brownian walk."
+                triggered_signals = ["acceptance"]
+
+            # Priority 7: Nominal Balanced Cooling
+            else:
+                self.temperature = max(self.min_temperature, self.temperature * self.cool_steady_multiplier)
+                decision = "STEADY_COOL"
+                mode = "BALANCED"
+                reason = f"Search dynamics inside nominal bounds (Acc: {w_acc*100:.1f}%, Imp: {w_imp*100:.1f}%, Div: {div:.2f}). Steady cooling."
+                triggered_signals = []
+
+        entry = {
+            "iteration": iteration,
+            "signals": {
+                "acceptance_rate": round(window_acceptance_rate, 3),
+                "improvement_rate": round(window_improvement_rate, 3),
+                "stagnation": stagnation,
+                "diversity": round(diversity, 3),
+            },
+            "triggered_signals": triggered_signals,
             "decision": decision,
             "mode": mode,
             "reason": reason,
+            "old_temperature": round(old_temp, 2),
+            "new_temperature": round(self.temperature, 2),
+            "cost_at_decision": current_best_cost,
+            "cost_delta": None,
+            "outcome": "PENDING",
+            "ablation_mode": self.ablation_mode,
         }
+        self.decision_history.append(entry)
+        return entry
 
 
 # ============================================================
@@ -503,9 +607,11 @@ async def run_adaptive_sa(
     session: SessionContext,
     initial_route: Optional[List[int]] = None,
     initial_temp: float = 600.0,
+    ablation_mode: str = "full",
 ):
     """
     Adaptive Simulated Annealing with online feedback control.
+    Supports ablation modes: 'full', 'no_diversity', 'no_stagnation', 'no_acceptance', 'no_improvement', 'acceptance_only'.
     Continuously monitors search metrics and adjusts temperature & operator strategy.
     """
     n = len(cities)
@@ -523,6 +629,7 @@ async def run_adaptive_sa(
         initial_temperature=initial_temp,
         min_temperature=0.05,
         max_temperature=1200.0,
+        ablation_mode=ablation_mode,
     )
 
     accepted_all = 0
@@ -535,12 +642,18 @@ async def run_adaptive_sa(
     recent_improvements = []
     history_edges: List[Set[frozenset]] = [get_tour_edges(route)]
 
+    operator_stats = {
+        op: {"proposed": 0, "accepted": 0, "improved": 0}
+        for op in ["2-opt", "or-opt", "insert", "swap"]
+    }
+
     decision_data = {
         "decision": "INITIALIZING",
         "mode": "BALANCED",
-        "reason": "Starting adaptive optimization.",
+        "reason": f"Starting adaptive optimization (ablation mode: {ablation_mode}).",
         "old_temperature": initial_temp,
         "new_temperature": initial_temp,
+        "triggered_signals": [],
     }
 
     # Adaptive operator weights
@@ -555,6 +668,7 @@ async def run_adaptive_sa(
         session.step_requested = False
 
         candidate, op_name = apply_neighborhood_operator(route, op_weights)
+        operator_stats[op_name]["proposed"] += 1
         candidate_cost = route_cost(candidate, cities)
         delta = candidate_cost - current_cost
 
@@ -568,6 +682,7 @@ async def run_adaptive_sa(
             current_cost = candidate_cost
             is_accepted = True
             accepted_all += 1
+            operator_stats[op_name]["accepted"] += 1
             history_edges.append(get_tour_edges(route))
             if len(history_edges) > 15:
                 history_edges.pop(0)
@@ -577,6 +692,7 @@ async def run_adaptive_sa(
                 best_route = candidate.copy()
                 is_improved = True
                 improvements_all += 1
+                operator_stats[op_name]["improved"] += 1
                 stagnation = 0
             else:
                 stagnation += 1
@@ -601,12 +717,16 @@ async def run_adaptive_sa(
                 window_improvement_rate=win_imp,
                 stagnation=stagnation,
                 diversity=diversity,
+                current_best_cost=best_cost,
             )
 
-            if "REHEAT" in decision_data["decision"]:
+            if "REHEAT" in decision_data["decision"] or "DIVERSIFICATION" in decision_data["decision"]:
                 total_reheats += 1
-                # When reheating, boost or-opt/insert/swap for structural diversification
-                op_weights = {"2-opt": 0.40, "or-opt": 0.25, "insert": 0.20, "swap": 0.15}
+                if decision_data["decision"] == "STRUCTURAL_DIVERSIFICATION":
+                    # When diversity collapsed and deep stagnation, emphasize Or-Opt and Insert
+                    op_weights = {"2-opt": 0.35, "or-opt": 0.30, "insert": 0.20, "swap": 0.15}
+                else:
+                    op_weights = {"2-opt": 0.50, "or-opt": 0.22, "insert": 0.18, "swap": 0.10}
             elif decision_data["mode"] == "EXPLOITATION":
                 # In exploitation mode, emphasize 2-opt and or-opt untangling
                 op_weights = {"2-opt": 0.80, "or-opt": 0.12, "insert": 0.05, "swap": 0.03}
@@ -621,7 +741,8 @@ async def run_adaptive_sa(
 
             await websocket.send_json({
                 "type": "iteration",
-                "algorithm": "Adaptive Simulated Annealing",
+                "algorithm": f"Adaptive SA ({ablation_mode})" if ablation_mode != "full" else "Adaptive Simulated Annealing",
+                "ablation_mode": ablation_mode,
                 "iteration": iteration,
                 "current_cost": current_cost,
                 "best_cost": best_cost,
@@ -634,9 +755,11 @@ async def run_adaptive_sa(
                 "mode": decision_data["mode"],
                 "decision": decision_data["decision"],
                 "reason": decision_data["reason"],
+                "triggered_signals": decision_data.get("triggered_signals", []),
                 "route": best_route,
                 "operator": op_name,
                 "total_reheats": total_reheats,
+                "operator_stats": operator_stats,
             })
 
         if session.delay_seconds > 0:
@@ -644,11 +767,14 @@ async def run_adaptive_sa(
 
     await websocket.send_json({
         "type": "complete",
-        "algorithm": "Adaptive Simulated Annealing",
+        "algorithm": f"Adaptive SA ({ablation_mode})" if ablation_mode != "full" else "Adaptive Simulated Annealing",
+        "ablation_mode": ablation_mode,
         "best_cost": best_cost,
         "route": best_route,
         "iterations_completed": iteration,
         "stagnation_events": total_reheats,
+        "decision_log": controller.decision_history,
+        "operator_stats": operator_stats,
     })
 
 
@@ -771,7 +897,7 @@ async def websocket_endpoint(websocket: WebSocket):
                     "distribution": distribution,
                 })
 
-                if algorithm == "conventional":
+                if algorithm in ("conventional", "standard_sa"):
                     running_task = asyncio.create_task(
                         run_conventional_sa(websocket, cities, iterations, session)
                     )
@@ -780,8 +906,10 @@ async def websocket_endpoint(websocket: WebSocket):
                         run_benchmark_comparison(websocket, cities, iterations, session)
                     )
                 else:
+                    # Accepts 'adaptive', 'full', or any ablation mode
+                    ablation = "full" if algorithm in ("adaptive", "full") else algorithm
                     running_task = asyncio.create_task(
-                        run_adaptive_sa(websocket, cities, iterations, session)
+                        run_adaptive_sa(websocket, cities, iterations, session, ablation_mode=ablation)
                     )
 
     except WebSocketDisconnect:
@@ -793,6 +921,76 @@ async def websocket_endpoint(websocket: WebSocket):
         if running_task and not running_task.done():
             running_task.cancel()
         print(f"WebSocket session error: {e}")
+
+
+# ============================================================
+# BENCHMARK SUITE & ABLATION ENDPOINTS
+# ============================================================
+
+from benchmark_runner import (
+    run_multi_seed_benchmark,
+    export_benchmark_to_csv,
+    SCALED_BERLIN52_OPTIMAL,
+)
+
+LATEST_BENCHMARK_RESULTS: Optional[Dict[str, Any]] = None
+
+
+@app.post("/api/benchmark/suite")
+def trigger_benchmark_suite(payload: Dict[str, Any]):
+    """
+    Executes an automated multi-seed benchmark & ablation study.
+    Runs identical initial tours and coordinates across seeds and algorithms.
+    """
+    global LATEST_BENCHMARK_RESULTS
+    distribution = payload.get("distribution", "berlin52")
+    city_count = int(payload.get("cities", 52))
+    iterations = int(payload.get("iterations", 1500))
+    seeds = payload.get("seeds", [42, 101, 777, 999, 1234])
+    algorithms = payload.get("algorithms", [
+        "standard_sa",
+        "acceptance_only",
+        "full",
+        "no_diversity",
+        "no_stagnation",
+        "no_improvement",
+    ])
+
+    results = run_multi_seed_benchmark(
+        distribution=distribution,
+        city_count=city_count,
+        iterations=iterations,
+        seeds=seeds,
+        algorithms=algorithms,
+    )
+    LATEST_BENCHMARK_RESULTS = results
+    return results
+
+
+@app.get("/api/benchmark/export_csv")
+def export_benchmark_csv():
+    """Exports the latest benchmark suite results as a downloadable CSV."""
+    global LATEST_BENCHMARK_RESULTS
+    if not LATEST_BENCHMARK_RESULTS:
+        LATEST_BENCHMARK_RESULTS = run_multi_seed_benchmark(
+            distribution="berlin52",
+            city_count=52,
+            iterations=1200,
+            seeds=[42, 101, 777],
+        )
+
+    csv_data = export_benchmark_to_csv(LATEST_BENCHMARK_RESULTS)
+    return Response(
+        content=csv_data,
+        media_type="text/csv",
+        headers={"Content-Disposition": "attachment; filename=benchmark_ablation_results.csv"}
+    )
+
+
+@app.get("/api/benchmark/latest")
+def get_latest_benchmark():
+    global LATEST_BENCHMARK_RESULTS
+    return LATEST_BENCHMARK_RESULTS or {"status": "no_benchmark_run_yet"}
 
 
 # ============================================================
@@ -813,8 +1011,17 @@ def health():
     return {
         "status": "healthy",
         "service": "Adaptive Simulated Annealing Platform",
-        "version": "2.1.0",
-        "algorithms": ["adaptive", "conventional", "compare"],
+        "version": "2.2.0",
+        "algorithms": [
+            "full",
+            "acceptance_only",
+            "standard_sa",
+            "no_diversity",
+            "no_stagnation",
+            "no_acceptance",
+            "no_improvement",
+            "compare",
+        ],
         "distributions": ["random", "clustered", "circular", "grid", "spiral", "berlin52"],
         "operators": ["2-opt", "or-opt", "insert", "swap"],
     }
@@ -829,9 +1036,20 @@ def get_presets():
             {"id": "circular", "name": "Circular Ring Topology", "description": "Concentric perturbed circular ring"},
             {"id": "grid", "name": "Manhattan Grid Lattice", "description": "Regular coordinate grid with minor jitter"},
             {"id": "spiral", "name": "Archimedean Spiral", "description": "Continuous spiral curve challenging local search"},
-            {"id": "berlin52", "name": "Berlin52 (TSPLIB)", "description": "Canonical TSPLIB 52-city benchmark instance"},
+            {"id": "berlin52", "name": "Berlin52 (TSPLIB)", "description": "Canonical TSPLIB 52-city benchmark instance (Known Opt: 7610.94)"},
+        ],
+        "algorithms": [
+            {"id": "adaptive", "name": "Full Adaptive SA (All Signals)", "description": "Online controller using acceptance, improvement, stagnation, & diversity"},
+            {"id": "acceptance_only", "name": "Adaptive Cooling (Acceptance Only)", "description": "Classical adaptive SA baseline adjusting purely to acceptance rate"},
+            {"id": "standard_sa", "name": "Standard SA (Geometric Cooling)", "description": "Blind open-loop exponential schedule (alpha=0.995)"},
+            {"id": "no_diversity", "name": "Ablation: No Diversity Signal", "description": "Diversity feedback disabled"},
+            {"id": "no_stagnation", "name": "Ablation: No Stagnation Reheats", "description": "Stagnation-triggered reheats disabled"},
+            {"id": "no_acceptance", "name": "Ablation: No Acceptance Feedback", "description": "Acceptance thaw/cool disabled"},
+            {"id": "no_improvement", "name": "Ablation: No Fertile Rapid Cool", "description": "Improvement gradient bursts disabled"},
+            {"id": "compare", "name": "Comparative Benchmark (Standard vs Full)", "description": "Direct side-by-side execution on identical seed"},
         ],
         "operators": ["2-opt", "or-opt", "insert", "swap"],
+        "berlin52_optimum": SCALED_BERLIN52_OPTIMAL,
     }
 
 
